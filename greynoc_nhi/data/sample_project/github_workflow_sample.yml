@@ -1,0 +1,16 @@
+name: fake deploy
+on:
+  pull_request_target:
+  push:
+    branches: ["*"]
+permissions: write-all
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: some-vendor/deploy-action@main
+        with:
+          token: ${{ secrets.PRODUCTION_DEPLOY_TOKEN }}
+      - run: echo "deploying with ${{ secrets.AWS_ACCESS_KEY_ID }}"

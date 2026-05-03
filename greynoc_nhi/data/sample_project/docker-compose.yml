@@ -1,0 +1,9 @@
+services:
+  app:
+    image: fake/app:latest
+    privileged: true
+    environment:
+      STRIPE_SECRET_KEY: "FAKE_STRIPE_SECRET_DO_NOT_USE_COMPOSE"
+      NODE_ENV: production
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

@@ -1,0 +1,5 @@
+{
+  "name": "GreyNOC NHI default rules",
+  "version": "0.1.0",
+  "note": "Rule behavior is implemented locally in greynoc_nhi/rules.py. This file documents the bundled baseline."
+}

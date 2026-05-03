@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "greynoc-nhi-engine"
+version = "0.1.0"
+description = "Local-first non-human identity, secret, OAuth, CI/CD, and AI-agent risk scanner"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "GreyNOC"}]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+cli = ["rich>=13"]
+
+[project.scripts]
+greynoc-nhi = "greynoc_nhi.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

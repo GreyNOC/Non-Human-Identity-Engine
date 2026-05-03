@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "mcp-server-filesystem",
+      "args": ["${workspaceFolder}", "~"]
+    },
+    "shell": {
+      "command": "mcp-server-shell"
+    },
+    "github": {
+      "command": "mcp-server-github",
+      "env": {
+        "GITHUB_TOKEN": "GNOC_FAKE_SECRET_DO_NOT_USE_MCP_TOKEN"
+      }
+    }
+  }
+}

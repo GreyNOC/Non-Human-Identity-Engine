@@ -1,0 +1,8 @@
+{
+  "service": "fake-client-app",
+  "api_key": "GNOC_FAKE_SECRET_DO_NOT_USE_CONFIG_123456",
+  "webhook_url": "https://hooks.slack.com/services/T000/B000/GNOC_FAKE_SECRET_DO_NOT_USE",
+  "database": {
+    "password": "GNOC_FAKE_SECRET_DO_NOT_USE_DB_PASSWORD"
+  }
+}

@@ -1,0 +1,94 @@
+"""Core dataclasses for GreyNOC NHI scan results."""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+
+@dataclass
+class NonHumanIdentity:
+    id: str
+    name: str
+    identity_type: str
+    source: str
+    file_path: str | None = None
+    line_number: int | None = None
+    owner: str | None = None
+    environment: str | None = None
+    provider: str | None = None
+    created_at: str | None = None
+    last_used_at: str | None = None
+    expires_at: str | None = None
+    secret_age_days: int | None = None
+    permissions: list[str] = field(default_factory=list)
+    scopes: list[str] = field(default_factory=list)
+    tools: list[str] = field(default_factory=list)
+    has_secret: bool = False
+    secret_fingerprint: str | None = None
+    masked_secret: str | None = None
+    admin_access: bool = False
+    production_access: bool = False
+    external_access: bool = False
+    data_access_level: str = "unknown"
+    logging_enabled: bool | None = None
+    rotation_status: str | None = None
+    approval_required: bool | None = None
+    evidence: list[str] = field(default_factory=list)
+    raw_reference: str | None = None
+    tags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class Finding:
+    id: str
+    rule_id: str
+    title: str
+    severity: str
+    risk_score: int
+    category: str
+    identity_id: str | None
+    identity_name: str | None
+    source: str
+    file_path: str | None
+    line_number: int | None
+    explanation: str
+    why_it_matters: str
+    evidence: list[str]
+    remediation: str
+    priority: str
+    owasp_nhi_refs: list[str]
+    control_hints: list[str]
+    created_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ScanResult:
+    scan_id: str
+    project_path: str
+    started_at: str
+    completed_at: str
+    identities: list[NonHumanIdentity]
+    findings: list[Finding]
+    overall_score: int
+    summary: str
+    stats: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "scan_id": self.scan_id,
+            "project_path": self.project_path,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "identities": [identity.to_dict() for identity in self.identities],
+            "findings": [finding.to_dict() for finding in self.findings],
+            "overall_score": self.overall_score,
+            "summary": self.summary,
+            "stats": self.stats,
+        }

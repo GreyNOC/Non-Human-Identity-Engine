@@ -1,0 +1,6 @@
+{
+  "manifest_version": 3,
+  "name": "Fake Browser Extension",
+  "permissions": ["tabs", "cookies", "webRequest"],
+  "host_permissions": ["<all_urls>"]
+}

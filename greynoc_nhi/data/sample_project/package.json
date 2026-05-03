@@ -1,0 +1,7 @@
+{
+  "name": "fake-client-app",
+  "scripts": {
+    "deploy": "TOKEN=GNOC_FAKE_SECRET_DO_NOT_USE npm run build && echo deploy production",
+    "postinstall": "node scripts/setup.js"
+  }
+}

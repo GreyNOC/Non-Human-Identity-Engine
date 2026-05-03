@@ -1,0 +1,13 @@
+name: fake deploy duplicate path
+on:
+  pull_request_target:
+permissions: write-all
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fake/deployer@main
+        with:
+          token: ${{ secrets.PRODUCTION_DEPLOY_TOKEN }}

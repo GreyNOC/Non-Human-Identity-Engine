@@ -1,0 +1,6 @@
+{
+  "client_id": "fake-client-id",
+  "client_secret": "GNOC_FAKE_SECRET_DO_NOT_USE_OAUTH_SECRET",
+  "redirect_uris": ["https://example.local/callback"],
+  "scopes": ["files.read.all", "mail.read", "offline_access", "repo"]
+}

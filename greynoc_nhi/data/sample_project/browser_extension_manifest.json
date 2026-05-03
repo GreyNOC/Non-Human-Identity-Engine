@@ -1,0 +1,6 @@
+{
+  "manifest_version": 3,
+  "name": "Fake Risky Extension",
+  "permissions": ["tabs", "cookies", "webRequest", "scripting", "history"],
+  "host_permissions": ["<all_urls>"]
+}

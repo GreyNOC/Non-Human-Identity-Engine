@@ -1,0 +1,7 @@
+{
+  "name": "release-agent",
+  "environment": "production",
+  "approval_required": false,
+  "memory": "sensitive customer deployment notes enabled",
+  "tools": ["run_shell", "send_email", "write_file", "github", "browser", "database", "deploy"]
+}
