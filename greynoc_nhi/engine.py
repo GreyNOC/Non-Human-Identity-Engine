@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from greynoc_nhi.advanced import synthesize_advanced_signals
+from greynoc_nhi.baseline import apply_baseline
+from greynoc_nhi.custom_rules import custom_rule_templates
 from greynoc_nhi.masking import fingerprint_secret, mask_secret
 from greynoc_nhi.models import NonHumanIdentity, ScanResult
 from greynoc_nhi.rules import run_rules
@@ -47,23 +49,24 @@ def normalize_signal(signal: dict) -> NonHumanIdentity:
         evidence=signal.get("evidence", []),
         raw_reference=signal.get("raw_reference"),
         tags=tags,
+        confidence=signal.get("confidence", "medium"),
     )
 
 
 class Engine:
     """Runs scan, rule evaluation, scoring, and optional persistence."""
 
-    def __init__(self, db_path: str | Path | None = None) -> None:
-        self.scanner = Scanner()
+    def __init__(self, db_path: str | Path | None = None, rule_pack_path: str | Path | None = None) -> None:
+        self.scanner = Scanner(rule_pack_path=rule_pack_path)
         self.storage = Storage(db_path) if db_path else None
 
-    def run_scan(self, project_path: str | Path, persist: bool = True) -> ScanResult:
+    def run_scan(self, project_path: str | Path, persist: bool = True, baseline_path: str | Path | None = None) -> ScanResult:
         started = utc_now()
         raw = self.scanner.scan(project_path)
         identities = [normalize_signal(signal) for signal in raw["signals"]]
         advanced_signals = synthesize_advanced_signals(identities, raw)
         identities.extend(normalize_signal(signal) for signal in advanced_signals)
-        findings = run_rules(identities)
+        findings = run_rules(identities, custom_rule_templates(raw.get("custom_rules", [])))
         overall = calculate_overall_score(identities, findings)
         completed = utc_now()
         critical = sum(1 for f in findings if f.severity == "critical")
@@ -90,6 +93,7 @@ class Engine:
                 "skipped_files": raw["skipped_files"],
                 "parser_errors": raw["errors"],
                 "advanced_correlations": len(advanced_signals),
+                "custom_rules_loaded": len(raw.get("custom_rules", [])),
                 "severity_label": severity_label(overall),
                 "critical_findings": critical,
                 "high_findings": high,
@@ -97,6 +101,8 @@ class Engine:
                 "findings_count": len(findings),
             },
         )
+        if baseline_path:
+            apply_baseline(result, baseline_path)
         if persist and self.storage:
             self.storage.save_scan(result)
         return result

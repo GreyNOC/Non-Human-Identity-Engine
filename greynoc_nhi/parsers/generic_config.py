@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from greynoc_nhi.confidence import infer_confidence, should_suppress_candidate
 from greynoc_nhi.masking import looks_like_secret
 from greynoc_nhi.parsers.base import Signal, make_signal
-from greynoc_nhi.utils import flatten_json, parse_json_safely, simple_yaml_pairs
+from greynoc_nhi.utils import flatten_json, line_number_for_key_value, parse_json_safely, simple_yaml_pairs
 
 COMMON_KEYS = {
     "api_key",
@@ -61,19 +62,23 @@ def parse(path: Path, text: str) -> list[Signal]:
         if normalized not in COMMON_KEYS and not any(part in normalized for part in COMMON_KEYS):
             continue
         value_s = str(value)
+        if should_suppress_candidate(normalized, value_s):
+            continue
         if not looks_like_secret(value_s) and "-----BEGIN" not in value_s and "://" not in value_s:
             continue
+        resolved_line = line or line_number_for_key_value(text, str(key), value_s)
         signals.append(
             make_signal(
                 rule_id=_rule_for(normalized, value_s),
                 file_path=path,
-                line_number=line,
+                line_number=resolved_line,
                 name=str(key),
                 identity_type="API key" if "key" in normalized else "automation script credential",
                 source="generic config",
                 evidence=f"{key}: {value_s}",
                 secret_value=value_s,
                 tags=["plaintext_secret", "hardcoded_secret"],
+                confidence=infer_confidence(_rule_for(normalized, value_s), secret_value=value_s),
             )
         )
     return signals

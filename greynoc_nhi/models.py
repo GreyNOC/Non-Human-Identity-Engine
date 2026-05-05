@@ -37,6 +37,7 @@ class NonHumanIdentity:
     evidence: list[str] = field(default_factory=list)
     raw_reference: str | None = None
     tags: list[str] = field(default_factory=list)
+    confidence: str = "medium"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -63,6 +64,9 @@ class Finding:
     owasp_nhi_refs: list[str]
     control_hints: list[str]
     created_at: str
+    confidence: str = "medium"
+    baseline_status: str = "new"
+    baseline_key: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

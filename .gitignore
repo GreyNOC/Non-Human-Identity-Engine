@@ -12,5 +12,7 @@ build/
 *.sqlite3-journal
 /reports/
 /reports_*/
+greynoc_nhi/data/reports/*
+!greynoc_nhi/data/reports/.gitkeep
 .greynoc_nhi/
 .coverage

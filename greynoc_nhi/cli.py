@@ -6,11 +6,13 @@ import argparse
 import json
 from pathlib import Path
 
+from greynoc_nhi.baseline import has_new_findings_at_or_above, write_baseline
 from greynoc_nhi.constants import DEFAULT_DB_PATH
 from greynoc_nhi.engine import Engine
 from greynoc_nhi.gui import launch_gui
 from greynoc_nhi.indicators import with_cli_indicator
 from greynoc_nhi.reports import generate_all_reports, generate_json_report
+from greynoc_nhi.sarif import generate_sarif_report
 from greynoc_nhi.sample_data import sample_project_path
 from greynoc_nhi.scoring import severity_label
 from greynoc_nhi.storage import clear_all
@@ -25,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", dest="json_path", help="Scan a project and print JSON path/result")
     parser.add_argument("--clear-db", action="store_true", help="Clear local SQLite scan history")
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="SQLite database path")
+    parser.add_argument("--sarif-out", help="Write SARIF 2.1.0 report to this file or directory")
+    parser.add_argument("--baseline", help="Baseline JSON file used to mark known findings")
+    parser.add_argument("--write-baseline", help="Write a baseline JSON file from the current scan")
+    parser.add_argument("--fail-on-new", choices=["low", "medium", "high", "critical"], help="Return nonzero if a new finding at or above this severity exists")
+    parser.add_argument("--rules", help="Custom JSON rule pack path")
     return parser
 
 
@@ -40,14 +47,32 @@ def print_summary(result, reports: dict[str, Path] | None = None) -> None:
             print(f"{report_type.upper()} report: {path}")
 
 
-def scan_with_reports(engine: Engine, project_path: str | Path, out_dir: str | None) -> tuple[object, dict[str, Path]]:
-    scan_result = engine.run_scan(project_path)
-    return scan_result, generate_all_reports(scan_result, out_dir)
+def _post_process(scan_result, args) -> tuple[object, dict[str, Path]]:
+    reports = generate_all_reports(scan_result, args.out)
+    if args.sarif_out:
+        reports["sarif"] = generate_sarif_report(scan_result, args.sarif_out)
+    if args.write_baseline:
+        reports["baseline"] = write_baseline(scan_result, args.write_baseline)
+    return scan_result, reports
 
 
-def scan_with_json_report(engine: Engine, project_path: str | Path, out_dir: str | None) -> tuple[object, Path]:
-    scan_result = engine.run_scan(project_path)
-    return scan_result, generate_json_report(scan_result, out_dir)
+def scan_with_reports(engine: Engine, project_path: str | Path, args) -> tuple[object, dict[str, Path]]:
+    scan_result = engine.run_scan(project_path, baseline_path=args.baseline)
+    return _post_process(scan_result, args)
+
+
+def scan_with_json_report(engine: Engine, project_path: str | Path, args) -> tuple[object, Path]:
+    scan_result = engine.run_scan(project_path, baseline_path=args.baseline)
+    if args.write_baseline:
+        write_baseline(scan_result, args.write_baseline)
+    if args.sarif_out:
+        generate_sarif_report(scan_result, args.sarif_out)
+    report_path = generate_json_report(scan_result, args.out)
+    return scan_result, report_path
+
+
+def exit_code_for_baseline(scan_result, args) -> int:
+    return 1 if has_new_findings_at_or_above(scan_result, args.fail_on_new) else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,28 +84,28 @@ def main(argv: list[str] | None = None) -> int:
         clear_all(args.db)
         print("Local GreyNOC NHI database cleared.")
         return 0
-    engine = Engine(args.db)
+    engine = Engine(args.db, rule_pack_path=args.rules)
     if args.load_samples:
         result, reports = with_cli_indicator(
             "Scanning sample project",
-            lambda: scan_with_reports(engine, sample_project_path(), args.out),
+            lambda: scan_with_reports(engine, sample_project_path(), args),
         )
         print_summary(result, reports)
-        return 0
+        return exit_code_for_baseline(result, args)
     if args.scan:
         result, reports = with_cli_indicator(
             "Scanning project",
-            lambda: scan_with_reports(engine, args.scan, args.out),
+            lambda: scan_with_reports(engine, args.scan, args),
         )
         print_summary(result, reports)
-        return 0
+        return exit_code_for_baseline(result, args)
     if args.json_path:
         result, report_path = with_cli_indicator(
             "Scanning project",
-            lambda: scan_with_json_report(engine, args.json_path, args.out),
+            lambda: scan_with_json_report(engine, args.json_path, args),
         )
         print(json.dumps({"scan": result.to_dict(), "json_report": str(report_path)}, indent=2))
-        return 0
+        return exit_code_for_baseline(result, args)
     build_parser().print_help()
     return 1
 

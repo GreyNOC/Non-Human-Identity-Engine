@@ -103,6 +103,109 @@ Formats:
 - HTML: polished, printable, client-ready
 - JSON: structured scan output
 - Markdown: developer-friendly summary
+- SARIF 2.1.0: code scanning and CI-friendly findings
+
+Generate SARIF:
+
+```bash
+python -m greynoc_nhi --scan ./greynoc_nhi/data/sample_project --out ./reports --sarif-out ./reports/greynoc-nhi.sarif
+```
+
+## Confidence Scoring
+
+Every identity and finding includes a confidence level:
+
+- `high`: provider-specific token format, private key block, service account JSON, GitHub Actions `write-all`, `pull_request_target` with secrets, Kubernetes `cluster-admin`, Docker socket, or high-risk MCP access.
+- `medium`: generic secret-like values with useful context, broad permissions inferred from config, or likely risky automation settings.
+- `low`: weak generic patterns, placeholder-like values, test/example contexts, or values that should be reviewed but not treated as confirmed secrets.
+
+Placeholder values such as `changeme`, `replace-me`, `<token>`, `${VAR}`, and `${{ secrets.X }}` are suppressed or downgraded. The bundled `GNOC_FAKE_SECRET_DO_NOT_USE` marker remains detectable so tests and sample data keep working.
+
+## Baselines
+
+Baselines let teams accept existing findings and fail later only on new ones.
+
+Write a baseline:
+
+```bash
+python -m greynoc_nhi --scan ./greynoc_nhi/data/sample_project --write-baseline ./greynoc-baseline.json
+```
+
+Use a baseline and fail only on new critical findings:
+
+```bash
+python -m greynoc_nhi --scan ./greynoc_nhi/data/sample_project --baseline ./greynoc-baseline.json --fail-on-new critical
+```
+
+Supported fail severities are `low`, `medium`, `high`, and `critical`.
+
+## .greynocignore
+
+Add a `.greynocignore` file to the project root to skip local-only paths in addition to the built-in ignored directories.
+
+Supported syntax:
+
+```gitignore
+# comments and blank lines are ignored
+*.pem
+testdata/*
+samples/*
+local-secrets.env
+```
+
+The ignore file supports exact file or directory names and simple glob patterns.
+
+## Custom JSON Rule Packs
+
+Custom rule packs let teams add local patterns without adding dependencies or calling external services. JSON is supported now; YAML is future work unless a safe dependency-free subset becomes useful.
+
+Example:
+
+```json
+{
+  "rules": [
+    {
+      "id": "company_internal_admin_token",
+      "title": "Internal admin token detected",
+      "severity": "critical",
+      "pattern": "GNOC_ADMIN_[A-Za-z0-9]{24,}",
+      "identity_type": "internal admin token",
+      "provider": "greynoc",
+      "remediation": "Rotate the token and move it to a managed secret store.",
+      "confidence": "high"
+    }
+  ]
+}
+```
+
+Run with a rule pack:
+
+```bash
+python -m greynoc_nhi --scan ./my-project --rules ./greynoc-rules.json --out ./reports
+```
+
+Custom rule matches are masked before they enter reports or SQLite.
+
+## CI Example
+
+GitHub Actions example:
+
+```yaml
+name: GreyNOC NHI
+on: [pull_request]
+jobs:
+  nhi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e .
+      - run: python -m greynoc_nhi --scan . --out ./reports --sarif-out ./reports/greynoc-nhi.sarif --baseline ./greynoc-baseline.json --fail-on-new critical
+```
+
+GreyNOC remains local and defensive in CI: it does not validate credentials, log into services, or call third-party APIs with discovered values.
 
 ## Scoring
 
@@ -148,8 +251,7 @@ Screenshots can be added after running the GUI locally.
 ## Roadmap
 
 - More config-specific parsers
-- SARIF export
-- Optional custom rule packs
+- YAML rule-pack support if it can stay safe and lightweight
 - Trend comparison between scans
 - More granular ownership workflows
 

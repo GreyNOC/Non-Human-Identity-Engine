@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import re
 
+from greynoc_nhi.confidence import is_placeholder_value
+
 
 SECRET_HINT_RE = re.compile(
     r"(secret|token|password|private[_-]?key|api[_-]?key|client[_-]?secret|access[_-]?key|webhook)",
@@ -34,6 +36,8 @@ def looks_like_secret(value: str) -> bool:
     value = str(value).strip()
     if not value or value.startswith("${{") or value.startswith("$"):
         return False
+    if is_placeholder_value(value):
+        return "GNOC_FAKE_SECRET_DO_NOT_USE" in value
     if "GNOC_FAKE_SECRET_DO_NOT_USE" in value:
         return True
     if len(value) >= 16 and re.search(r"[A-Za-z]", value) and re.search(r"\d|[_\-/+=]", value):
