@@ -62,6 +62,12 @@ RULE_TO_OWASP = {
     "nhi_orphaned_identity_cluster": ["NHI1:2025"],
     "nhi_production_without_approval_gate": ["NHI8:2025", "NHI10:2025"],
     "nhi_secret_file_not_gitignored": ["NHI2:2025"],
+    "nhi_package_registry_token_detected": ["NHI2:2025", "NHI3:2025"],
+    "nhi_deployment_platform_token_detected": ["NHI2:2025", "NHI8:2025"],
+    "nhi_monitoring_dsn_exposed": ["NHI3:2025"],
+    "nhi_encoded_registry_auth_detected": ["NHI2:2025", "NHI3:2025"],
+    "nhi_bearer_token_detected": ["NHI2:2025", "NHI4:2025"],
+    "nhi_jwt_detected": ["NHI2:2025", "NHI4:2025"],
 }
 
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +24,10 @@ class Storage:
         self.init_db()
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=MEMORY")
+        conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
     def init_db(self) -> None:
@@ -61,13 +65,27 @@ class Storage:
         except sqlite3.OperationalError as exc:
             journal = self.db_path.with_name(self.db_path.name + "-journal")
             if "disk I/O" in str(exc) and journal.exists():
-                journal.unlink(missing_ok=True)
+                try:
+                    journal.unlink(missing_ok=True)
+                except PermissionError:
+                    pass
                 with self.connect() as conn:
                     conn.executescript(schema)
             else:
                 raise
 
     def save_scan(self, scan_result: ScanResult) -> None:
+        try:
+            self._save_scan_once(scan_result)
+        except sqlite3.OperationalError as exc:
+            if "readonly" not in str(exc).lower():
+                raise
+            fallback_dir = Path(tempfile.mkdtemp(prefix=f"greynoc_nhi_db_{os.getpid()}_"))
+            self.db_path = fallback_dir / "greynoc_nhi.sqlite3"
+            self.init_db()
+            self._save_scan_once(scan_result)
+
+    def _save_scan_once(self, scan_result: ScanResult) -> None:
         with self.connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO scans VALUES (?, ?, ?, ?, ?, ?, ?)",

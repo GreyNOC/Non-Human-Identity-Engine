@@ -21,16 +21,45 @@ def should_scan_file(path: Path) -> bool:
     return False
 
 
-def iter_scan_files(project_path: str | Path) -> list[Path]:
+def iter_scan_files(project_path: str | Path, ignored_dirs: set[str] | None = None) -> list[Path]:
     """Recursively list scan candidates while skipping noisy dependency folders."""
+    ignored = ignored_dirs or IGNORED_DIRS
     root = Path(project_path)
     files: list[Path] = []
-    for path in root.rglob("*"):
-        if any(part in IGNORED_DIRS for part in path.parts):
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            children = list(current.iterdir())
+        except OSError:
             continue
-        if path.is_file() and should_scan_file(path):
-            files.append(path)
+        for path in children:
+            if path.is_dir():
+                if path.name not in ignored:
+                    stack.append(path)
+                continue
+            if path.is_file() and should_scan_file(path):
+                files.append(path)
     return sorted(files)
+
+
+def dedupe_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop duplicate parser signals while preserving order."""
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for signal in signals:
+        key = (
+            signal.get("rule_id"),
+            signal.get("file_path"),
+            signal.get("line_number"),
+            signal.get("name"),
+            tuple(signal.get("evidence", [])),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(signal)
+    return deduped
 
 
 class Scanner:
@@ -45,16 +74,21 @@ class Scanner:
         errors: list[dict[str, str]] = []
         scanned_files = 0
         skipped_files = 0
-        for path in iter_scan_files(root):
+        parser_cache: dict[tuple[str, str, str], list[Any]] = {}
+        for path in iter_scan_files(root, self.ignored_dirs):
             text = read_text_safely(path)
             if text is None:
                 skipped_files += 1
                 continue
             scanned_files += 1
-            for parser in PARSERS:
+            cache_key = (path.name.lower(), path.suffix.lower(), str(path.parent).replace("\\", "/").lower())
+            parsers = parser_cache.get(cache_key)
+            if parsers is None:
+                parsers = [parser for parser in PARSERS if parser.should_parse(path)]
+                parser_cache[cache_key] = parsers
+            for parser in parsers:
                 try:
-                    if parser.should_parse(path):
-                        signals.extend(parser.parse(path, text))
+                    signals.extend(parser.parse(path, text))
                 except Exception as exc:  # Defensive parser isolation.
                     errors.append({"file": str(path), "parser": parser.__name__, "error": str(exc)})
-        return {"project_path": str(root), "signals": signals, "errors": errors, "scanned_files": scanned_files, "skipped_files": skipped_files}
+        return {"project_path": str(root), "signals": dedupe_signals(signals), "errors": errors, "scanned_files": scanned_files, "skipped_files": skipped_files}

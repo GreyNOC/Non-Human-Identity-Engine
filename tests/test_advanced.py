@@ -1,3 +1,6 @@
+from pathlib import Path
+from tempfile import mkdtemp
+
 from greynoc_nhi.advanced import synthesize_advanced_signals
 from greynoc_nhi.engine import Engine, normalize_signal
 from greynoc_nhi.sample_data import sample_project_path
@@ -58,8 +61,9 @@ def test_advanced_detects_secret_sprawl_same_file():
     assert any(signal["rule_id"] == "nhi_secret_sprawl_same_file" for signal in signals)
 
 
-def test_engine_sample_project_includes_advanced_correlations(tmp_path):
-    result = Engine(tmp_path / "advanced.sqlite3").run_scan(sample_project_path())
+def test_engine_sample_project_includes_advanced_correlations():
+    temp_dir = mkdtemp(prefix="greynoc_nhi_test_")
+    result = Engine(Path(temp_dir) / "advanced.sqlite3").run_scan(sample_project_path())
     rule_ids = {finding.rule_id for finding in result.findings}
     assert "nhi_ai_mcp_privilege_bridge" in rule_ids
     assert "nhi_untrusted_ci_deploy_path" in rule_ids

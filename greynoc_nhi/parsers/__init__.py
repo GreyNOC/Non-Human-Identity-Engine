@@ -12,6 +12,7 @@ from . import (
     github_actions,
     kubernetes,
     mcp_configs,
+    modern_saas,
     oauth_configs,
     package_json,
     python_requirements,
@@ -32,6 +33,7 @@ PARSERS = [
     browser_extensions,
     ai_agents,
     mcp_configs,
+    modern_saas,
     webhooks,
     python_requirements,
 ]

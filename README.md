@@ -8,6 +8,8 @@ It scans an app repo or project folder, inventories non-human identities, detect
 
 The engine includes an advanced correlation pass that reasons across files instead of treating every match as isolated. It can identify secret sprawl, provider exposure chains, AI-agent-to-MCP privilege bridges, untrusted CI/CD deployment paths, build pipeline secret sinks, shadow admin automation paths, customer-data credential coupling, orphaned identity clusters, and production automation without approval gates.
 
+The scanner is optimized for local developer repos: it prunes ignored directories during traversal, skips large files, caches parser dispatch decisions, and deduplicates repeated parser signals before rule evaluation.
+
 ## Why Non-Human Identities Matter
 
 Modern apps ship with API keys, OAuth apps, service accounts, CI/CD tokens, webhooks, browser extension identities, MCP connectors, and AI agent tools. These identities can access code, cloud infrastructure, customer data, deployment systems, email, files, and payments. Before shipping, teams need to know what exists, what it can access, and what should be rotated, scoped, owned, logged, or gated.
@@ -26,6 +28,7 @@ Modern apps ship with API keys, OAuth apps, service accounts, CI/CD tokens, webh
 - AI agent tool configs
 - MCP server configs
 - Webhook URLs and secrets
+- Package registry, deployment platform, monitoring DSN, Bearer, JWT-like, and modern SaaS token patterns
 
 ## What It Does Not Do
 

@@ -69,6 +69,12 @@ RULE_CATALOG: dict[str, RuleTemplate] = {
     "nhi_orphaned_identity_cluster": RuleTemplate("nhi_orphaned_identity_cluster", "Orphaned identity cluster detected", 70, "governance", "Most discovered identities lack owner and logging evidence.", "A single unowned identity is a cleanup task; a cluster of them means offboarding, rotation, and incident response will be unreliable.", "Assign owners, add logging evidence, and review stale identities as a tracked remediation sprint.", ["ownership", "logging", "offboarding"]),
     "nhi_production_without_approval_gate": RuleTemplate("nhi_production_without_approval_gate", "Production-capable automation lacks approval gates", 90, "environment isolation", "Multiple production-capable identities lack explicit approval gates.", "Production automation without review gates lets mistakes, compromised workflows, or unsafe AI/MCP tool calls reach live systems.", "Require protected environment approvals and human gates for production deploy, shell, cloud, database, and destructive tools.", ["production gates", "change control"]),
     "nhi_secret_file_not_gitignored": RuleTemplate("nhi_secret_file_not_gitignored", "Secret-bearing env file lacks gitignore guard", 65, "repository hygiene", "A secret-bearing .env-style file was found without a root .gitignore guard.", "Even fake-looking env files are often copied into real projects, and missing ignore rules make accidental commits more likely.", "Add .env, .env.*, and local secret files to .gitignore; keep checked-in examples value-free.", ["repo hygiene", "commit prevention"]),
+    "nhi_package_registry_token_detected": RuleTemplate("nhi_package_registry_token_detected", "Package registry token detected", 80, "package registry access", "A package registry authentication token was found.", "Registry tokens can publish, replace, or pull private packages and can be abused in build or dependency supply-chain paths.", "Rotate the token, scope it read-only or publish-only as needed, and store it outside project files.", ["package registry least privilege", "rotation"]),
+    "nhi_deployment_platform_token_detected": RuleTemplate("nhi_deployment_platform_token_detected", "Deployment platform token detected", 85, "deployment access", "A deployment platform token was found.", "Deployment tokens can ship code, change environment variables, or access production release settings.", "Rotate the token, scope it to the required project, and require protected deployment approvals.", ["deployment gates", "token scoping"]),
+    "nhi_monitoring_dsn_exposed": RuleTemplate("nhi_monitoring_dsn_exposed", "Monitoring DSN exposed", 45, "monitoring", "A monitoring or telemetry DSN was found.", "A DSN is not always a full secret, but it can enable noisy event injection, project discovery, or leakage of telemetry routing details.", "Move DSNs to public-safe config only when intended, restrict ingest settings, and avoid coupling DSNs with private auth tokens.", ["telemetry hygiene"]),
+    "nhi_encoded_registry_auth_detected": RuleTemplate("nhi_encoded_registry_auth_detected", "Encoded package registry auth detected", 80, "package registry access", "A package registry auth value was found in a config file.", "Encoded registry auth can still grant package access and often leaks through dotfiles or container build contexts.", "Rotate the registry credential and replace checked-in auth with user-local or CI secret injection.", ["registry auth hygiene", "build context hygiene"]),
+    "nhi_bearer_token_detected": RuleTemplate("nhi_bearer_token_detected", "Bearer token hardcoded in HTTP authorization config", 80, "API access", "A Bearer token appears hardcoded in local code or config.", "Bearer tokens are directly replayable credentials if exposed, even though this tool never validates or uses them.", "Rotate the token and load Authorization headers from a protected runtime secret source.", ["HTTP auth hygiene", "rotation"]),
+    "nhi_jwt_detected": RuleTemplate("nhi_jwt_detected", "JWT-like token detected", 70, "session or API token", "A JWT-like token appears in project files.", "JWTs can represent service, session, or automation access and may carry sensitive claims even without validation.", "Remove the token from source, rotate/revoke it if real, and keep only documented placeholders.", ["token hygiene", "session safety"]),
 }
 
 
@@ -98,6 +104,20 @@ def make_finding(rule_id: str, identity: NonHumanIdentity, evidence: list[str] |
     )
 
 
+def needs_identity_governance_finding(identity: NonHumanIdentity) -> bool:
+    """Return True for identities where owner/logging should be called out individually."""
+    return (
+        identity.admin_access
+        or identity.production_access
+        or identity.external_access
+        or identity.data_access_level in {"customer", "session", "source-code"}
+        or bool(identity.permissions)
+        or bool(identity.scopes)
+        or bool(identity.tools)
+        or identity.identity_type in {"CI/CD secret", "deployment token", "service account", "MCP server connector", "AI agent tool connector"}
+    )
+
+
 def run_rules(identities: list[NonHumanIdentity]) -> list[Finding]:
     """Generate findings from normalized identities."""
     findings: list[Finding] = []
@@ -121,16 +141,17 @@ def run_rules(identities: list[NonHumanIdentity]) -> list[Finding]:
                 if finding.id not in seen:
                     findings.append(finding)
                     seen.add(finding.id)
-        if identity.owner is None:
-            finding = make_finding("nhi_missing_owner", identity)
-            if finding.id not in seen:
-                findings.append(finding)
-                seen.add(finding.id)
-        if identity.logging_enabled is None or identity.logging_enabled is False:
-            finding = make_finding("nhi_missing_logging_evidence", identity)
-            if finding.id not in seen:
-                findings.append(finding)
-                seen.add(finding.id)
+        if "advanced_correlation" not in identity.tags and needs_identity_governance_finding(identity):
+            if identity.owner is None:
+                finding = make_finding("nhi_missing_owner", identity)
+                if finding.id not in seen:
+                    findings.append(finding)
+                    seen.add(finding.id)
+            if identity.logging_enabled is None or identity.logging_enabled is False:
+                finding = make_finding("nhi_missing_logging_evidence", identity)
+                if finding.id not in seen:
+                    findings.append(finding)
+                    seen.add(finding.id)
     for fingerprint, count in fingerprints.items():
         if count <= 1:
             continue
