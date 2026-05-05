@@ -77,10 +77,30 @@ RULE_CATALOG: dict[str, RuleTemplate] = {
     "nhi_jwt_detected": RuleTemplate("nhi_jwt_detected", "JWT-like token detected", 70, "session or API token", "A JWT-like token appears in project files.", "JWTs can represent service, session, or automation access and may carry sensitive claims even without validation.", "Remove the token from source, rotate/revoke it if real, and keep only documented placeholders.", ["token hygiene", "session safety"]),
 }
 
+SEVERITY_TO_SCORE = {"low": 30, "medium": 55, "high": 75, "critical": 90}
 
-def make_finding(rule_id: str, identity: NonHumanIdentity, evidence: list[str] | None = None, score_boost: int = 0) -> Finding:
-    template = RULE_CATALOG[rule_id]
+
+def make_finding(rule_id: str, identity: NonHumanIdentity, evidence: list[str] | None = None, score_boost: int = 0, custom_templates: dict | None = None) -> Finding:
+    if rule_id in RULE_CATALOG:
+        template = RULE_CATALOG[rule_id]
+    elif custom_templates and rule_id in custom_templates:
+        custom = custom_templates[rule_id]
+        template = RuleTemplate(
+            rule_id=rule_id,
+            title=custom.get("title", rule_id),
+            base_score=SEVERITY_TO_SCORE.get(custom.get("severity", "medium"), 55),
+            category="custom rule",
+            explanation="A custom local rule pack matched a secret-like value.",
+            why_it_matters="Custom rules let teams encode project-specific non-human identity risk patterns without using discovered credentials.",
+            remediation=custom.get("remediation", "Review and remediate this custom rule match."),
+            control_hints=["custom rule pack", "rotation"],
+        )
+    else:
+        return None  # type: ignore[return-value]
     score = min(100, template.base_score + score_boost)
+    refs = map_rule_to_owasp(rule_id)
+    if custom_templates and rule_id in custom_templates and not refs:
+        refs = ["NHI2:2025"]
     return Finding(
         id=stable_id("finding", rule_id, identity.id, identity.file_path, identity.line_number, evidence or identity.evidence),
         rule_id=rule_id,
@@ -98,9 +118,11 @@ def make_finding(rule_id: str, identity: NonHumanIdentity, evidence: list[str] |
         evidence=evidence or identity.evidence,
         remediation=template.remediation,
         priority="fix now" if score >= 80 else "next sprint" if score >= 60 else "planned hardening",
-        owasp_nhi_refs=map_rule_to_owasp(rule_id),
+        owasp_nhi_refs=refs,
         control_hints=template.control_hints,
         created_at=utc_now(),
+        confidence=identity.confidence,
+        baseline_key=None,
     )
 
 
@@ -118,7 +140,7 @@ def needs_identity_governance_finding(identity: NonHumanIdentity) -> bool:
     )
 
 
-def run_rules(identities: list[NonHumanIdentity]) -> list[Finding]:
+def run_rules(identities: list[NonHumanIdentity], custom_templates: dict | None = None) -> list[Finding]:
     """Generate findings from normalized identities."""
     findings: list[Finding] = []
     seen: set[str] = set()
@@ -126,29 +148,31 @@ def run_rules(identities: list[NonHumanIdentity]) -> list[Finding]:
     for identity in identities:
         if identity.secret_fingerprint:
             fingerprints[identity.secret_fingerprint] = fingerprints.get(identity.secret_fingerprint, 0) + 1
-        candidate_rules = [tag for tag in identity.tags if tag in RULE_CATALOG]
+        candidate_rules = [tag for tag in identity.tags if tag in RULE_CATALOG or (custom_templates and tag in custom_templates)]
         if not candidate_rules and identity.has_secret:
             candidate_rules.append("nhi_secret_leakage")
         for rule_id in candidate_rules:
             boost = 10 if identity.admin_access else 0
-            finding = make_finding(rule_id, identity, score_boost=boost)
+            finding = make_finding(rule_id, identity, score_boost=boost, custom_templates=custom_templates)
+            if finding is None:
+                continue
             if finding.id not in seen:
                 findings.append(finding)
                 seen.add(finding.id)
         if identity.has_secret and identity.rotation_status in {None, "unknown", "missing"}:
             for rule_id in ["nhi_no_rotation_policy", "nhi_long_lived_secret"]:
-                finding = make_finding(rule_id, identity)
+                finding = make_finding(rule_id, identity, custom_templates=custom_templates)
                 if finding.id not in seen:
                     findings.append(finding)
                     seen.add(finding.id)
         if "advanced_correlation" not in identity.tags and needs_identity_governance_finding(identity):
             if identity.owner is None:
-                finding = make_finding("nhi_missing_owner", identity)
+                finding = make_finding("nhi_missing_owner", identity, custom_templates=custom_templates)
                 if finding.id not in seen:
                     findings.append(finding)
                     seen.add(finding.id)
             if identity.logging_enabled is None or identity.logging_enabled is False:
-                finding = make_finding("nhi_missing_logging_evidence", identity)
+                finding = make_finding("nhi_missing_logging_evidence", identity, custom_templates=custom_templates)
                 if finding.id not in seen:
                     findings.append(finding)
                     seen.add(finding.id)
@@ -156,7 +180,7 @@ def run_rules(identities: list[NonHumanIdentity]) -> list[Finding]:
         if count <= 1:
             continue
         for identity in [item for item in identities if item.secret_fingerprint == fingerprint]:
-            finding = make_finding("nhi_nhi_reuse_suspected", identity, evidence=["Same masked secret fingerprint appears in multiple files."])
+            finding = make_finding("nhi_nhi_reuse_suspected", identity, evidence=["Same masked secret fingerprint appears in multiple files."], custom_templates=custom_templates)
             if finding.id not in seen:
                 findings.append(finding)
                 seen.add(finding.id)

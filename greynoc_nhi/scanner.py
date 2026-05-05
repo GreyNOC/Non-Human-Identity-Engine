@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from greynoc_nhi.constants import IGNORED_DIRS, MAX_FILE_BYTES, SCAN_EXTENSIONS, SCAN_FILE_NAMES
+from greynoc_nhi.custom_rules import CustomRule, load_rule_pack, scan_custom_rules
+from greynoc_nhi.ignore import is_ignored, load_greynocignore
 from greynoc_nhi.parsers import PARSERS
 from greynoc_nhi.utils import read_text_safely
 
@@ -21,10 +23,11 @@ def should_scan_file(path: Path) -> bool:
     return False
 
 
-def iter_scan_files(project_path: str | Path, ignored_dirs: set[str] | None = None) -> list[Path]:
+def iter_scan_files(project_path: str | Path, ignored_dirs: set[str] | None = None, ignore_patterns: list[str] | None = None) -> list[Path]:
     """Recursively list scan candidates while skipping noisy dependency folders."""
     ignored = ignored_dirs or IGNORED_DIRS
     root = Path(project_path)
+    patterns = ignore_patterns or []
     files: list[Path] = []
     stack = [root]
     while stack:
@@ -34,6 +37,8 @@ def iter_scan_files(project_path: str | Path, ignored_dirs: set[str] | None = No
         except OSError:
             continue
         for path in children:
+            if is_ignored(path, root, patterns):
+                continue
             if path.is_dir():
                 if path.name not in ignored:
                     stack.append(path)
@@ -65,8 +70,9 @@ def dedupe_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
 class Scanner:
     """Local recursive scanner."""
 
-    def __init__(self, ignored_dirs: set[str] | None = None) -> None:
+    def __init__(self, ignored_dirs: set[str] | None = None, rule_pack_path: str | Path | None = None) -> None:
         self.ignored_dirs = ignored_dirs or IGNORED_DIRS
+        self.custom_rules: list[CustomRule] = load_rule_pack(rule_pack_path)
 
     def scan(self, project_path: str | Path) -> dict[str, Any]:
         root = Path(project_path).resolve()
@@ -75,7 +81,8 @@ class Scanner:
         scanned_files = 0
         skipped_files = 0
         parser_cache: dict[tuple[str, str, str], list[Any]] = {}
-        for path in iter_scan_files(root, self.ignored_dirs):
+        ignore_patterns = load_greynocignore(root)
+        for path in iter_scan_files(root, self.ignored_dirs, ignore_patterns):
             text = read_text_safely(path)
             if text is None:
                 skipped_files += 1
@@ -91,4 +98,5 @@ class Scanner:
                     signals.extend(parser.parse(path, text))
                 except Exception as exc:  # Defensive parser isolation.
                     errors.append({"file": str(path), "parser": parser.__name__, "error": str(exc)})
-        return {"project_path": str(root), "signals": dedupe_signals(signals), "errors": errors, "scanned_files": scanned_files, "skipped_files": skipped_files}
+            signals.extend(scan_custom_rules(path, text, self.custom_rules))
+        return {"project_path": str(root), "signals": dedupe_signals(signals), "errors": errors, "scanned_files": scanned_files, "skipped_files": skipped_files, "ignore_patterns": ignore_patterns, "custom_rules": self.custom_rules}

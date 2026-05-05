@@ -10,6 +10,7 @@ from pathlib import Path
 from greynoc_nhi.constants import DEFAULT_REPORTS_DIR
 from greynoc_nhi.models import Finding, NonHumanIdentity, ScanResult
 from greynoc_nhi.owasp_mapping import describe_ref
+from greynoc_nhi.sarif import generate_sarif_report
 from greynoc_nhi.scoring import severity_label
 from greynoc_nhi.utils import utc_now
 
@@ -59,11 +60,15 @@ def generate_markdown_report(scan: ScanResult, out_dir: str | Path | None = None
         lines.extend([
             f"### {finding.severity.upper()} {finding.title}",
             f"- Score: {finding.risk_score}",
+            f"- Confidence: {finding.confidence}",
+            f"- Baseline: {finding.baseline_status}",
+            f"- Priority: {finding.priority}",
             f"- Rule: `{finding.rule_id}`",
             f"- File: `{finding.file_path or '-'}` line {finding.line_number or '-'}",
             f"- Evidence: {'; '.join(finding.evidence)}",
             f"- Why it matters: {finding.why_it_matters}",
             f"- Remediation: {finding.remediation}",
+            f"- Control hints: {_join(finding.control_hints)}",
             f"- OWASP NHI: {_join(finding.owasp_nhi_refs)}",
             "",
         ])
@@ -104,12 +109,12 @@ def _table_rows_findings(findings: list[Finding]) -> str:
     for finding in findings:
         rows.append(
             "<tr>"
-            f"<td>{_badge(finding.severity)}</td><td>{finding.risk_score}</td><td>{html.escape(finding.rule_id)}</td>"
+            f"<td>{_badge(finding.severity)}</td><td>{finding.risk_score}</td><td>{html.escape(finding.confidence)}</td><td>{html.escape(finding.baseline_status)}</td><td>{html.escape(finding.rule_id)}</td>"
             f"<td>{html.escape(finding.file_path or '-')}</td><td>{finding.line_number or '-'}</td>"
-            f"<td>{html.escape('; '.join(finding.evidence))}</td><td>{html.escape(finding.why_it_matters)}</td><td>{html.escape(finding.remediation)}</td>"
+            f"<td>{html.escape('; '.join(finding.evidence))}</td><td>{html.escape(finding.why_it_matters)}</td><td>{html.escape(finding.remediation)}</td><td>{html.escape(_join(finding.control_hints))}</td><td>{html.escape(_join(finding.owasp_nhi_refs))}</td>"
             "</tr>"
         )
-    return "\n".join(rows) or '<tr><td colspan="8">No findings found.</td></tr>'
+    return "\n".join(rows) or '<tr><td colspan="12">No findings found.</td></tr>'
 
 
 def generate_html_report(scan: ScanResult, out_dir: str | Path | None = None) -> Path:
@@ -158,7 +163,7 @@ footer {{ color:#52616a; font-size:12px; margin-top:34px; border-top:1px solid #
 <p><strong>Main risk themes:</strong> {html.escape(', '.join(f'{name} ({count})' for name, count in themes) or 'None')}</p></section>
 <section><h2>Developer Summary</h2><p>Fix critical and high issues first, especially exposed secrets, broad CI/CD permissions, admin cloud policies, unsafe MCP connectors, and AI agents with unapproved tools. Medium and low issues can follow as governance hardening.</p></section>
 <section><h2>NHI Inventory</h2><table><thead><tr><th>Type</th><th>Source</th><th>Name</th><th>Provider</th><th>Environment</th><th>Owner</th><th>Permissions / Scopes / Tools</th><th>Risk Indicators</th></tr></thead><tbody>{_table_rows_identities(scan.identities)}</tbody></table></section>
-<section><h2>Findings</h2><table><thead><tr><th>Severity</th><th>Score</th><th>Rule ID</th><th>File</th><th>Line</th><th>Evidence</th><th>Why It Matters</th><th>Remediation</th></tr></thead><tbody>{_table_rows_findings(scan.findings)}</tbody></table></section>
+<section><h2>Findings</h2><table><thead><tr><th>Severity</th><th>Score</th><th>Confidence</th><th>Baseline</th><th>Rule ID</th><th>File</th><th>Line</th><th>Evidence</th><th>Why It Matters</th><th>Remediation</th><th>Controls</th><th>OWASP</th></tr></thead><tbody>{_table_rows_findings(scan.findings)}</tbody></table></section>
 <section><h2>OWASP NHI Mapping</h2><table><thead><tr><th>Category</th><th>Count</th><th>Explanation</th></tr></thead><tbody>{''.join(f'<tr><td>{html.escape(ref)}</td><td>{count}</td><td>{html.escape(describe_ref(ref))}</td></tr>' for ref, count in sorted(owasp_counts.items())) or '<tr><td colspan="3">No mapped findings.</td></tr>'}</tbody></table></section>
 <section><h2>Blast-Radius View</h2><table><tbody>{''.join(f'<tr><th>{html.escape(name)}</th><td>{"Present" if present else "Not observed"}</td></tr>' for name, present in blast.items())}</tbody></table></section>
 <section><h2>30-Day Remediation Plan</h2><ol><li><strong>Day 0-3:</strong> rotate exposed critical secrets and remove write-all/admin paths.</li><li><strong>Day 4-10:</strong> revoke, rotate, and re-scope OAuth, GitHub, cloud, Docker, Kubernetes, and webhook identities.</li><li><strong>Day 11-20:</strong> harden CI/CD and cloud deployments.</li><li><strong>Day 21-30:</strong> assign owners, document rotation, enable logging, and add approval gates.</li></ol></section>

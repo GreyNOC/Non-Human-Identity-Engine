@@ -72,6 +72,21 @@ def line_number_for(text: str, needle: str) -> int | None:
     return None
 
 
+def line_number_at_offset(text: str, offset: int) -> int:
+    return text.count("\n", 0, max(0, offset)) + 1
+
+
+def line_number_for_key_value(text: str, key: str, value: object | None = None) -> int | None:
+    key_tail = str(key).split(".")[-1].split("[")[0]
+    value_s = "" if value is None else str(value)
+    for number, line in enumerate(text.splitlines(), 1):
+        if key_tail and key_tail in line:
+            return number
+        if value_s and value_s in line:
+            return number
+    return None
+
+
 def has_word(text: str, words: list[str]) -> bool:
     lower = text.lower()
     return any(re.search(rf"\b{re.escape(word.lower())}\b", lower) for word in words)

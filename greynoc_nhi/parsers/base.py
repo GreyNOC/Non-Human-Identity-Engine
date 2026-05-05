@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from greynoc_nhi.confidence import infer_confidence
 from greynoc_nhi.masking import mask_secret, redact_inline_secret
 from greynoc_nhi.utils import stable_id
 
@@ -35,6 +36,7 @@ def make_signal(
     approval_required: bool | None = None,
     logging_enabled: bool | None = None,
     rotation_status: str | None = None,
+    confidence: str | None = None,
 ) -> Signal:
     if secret_value:
         evidence = evidence.replace(secret_value, mask_secret(secret_value))
@@ -64,4 +66,5 @@ def make_signal(
         "approval_required": approval_required,
         "logging_enabled": logging_enabled,
         "rotation_status": rotation_status,
+        "confidence": infer_confidence(rule_id, masked_evidence, secret_value, confidence),
     }
