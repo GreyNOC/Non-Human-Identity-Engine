@@ -24,6 +24,22 @@ COMMON_KEYS = {
     "webhook_secret",
 }
 
+AI_PROVIDER_KEY_NAMES = {
+    "openai_api_key": "openai",
+    "anthropic_api_key": "anthropic",
+    "gemini_api_key": "gemini",
+    "google_api_key": "google",
+    "azure_openai_api_key": "azure openai",
+    "huggingfacehub_api_token": "hugging face",
+    "replicate_api_token": "replicate",
+    "mistral_api_key": "mistral",
+    "cohere_api_key": "cohere",
+    "together_api_key": "together",
+    "groq_api_key": "groq",
+    "perplexity_api_key": "perplexity",
+    "openrouter_api_key": "openrouter",
+}
+
 
 def should_parse(path: Path) -> bool:
     return path.suffix.lower() in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".py", ".js", ".ts"}
@@ -31,6 +47,8 @@ def should_parse(path: Path) -> bool:
 
 def _rule_for(key: str, value: str) -> str:
     lower = key.lower()
+    if lower in AI_PROVIDER_KEY_NAMES:
+        return "nhi_ai_provider_key_detected"
     if "private_key" in lower or "private key" in value.lower():
         return "nhi_private_key_detected"
     if "client_secret" in lower:
@@ -59,7 +77,7 @@ def parse(path: Path, text: str) -> list[Signal]:
     for key, value, line in rows:
         key_tail = str(key).split(".")[-1].lower()
         normalized = key_tail.replace("-", "_")
-        if normalized not in COMMON_KEYS and not any(part in normalized for part in COMMON_KEYS):
+        if normalized not in COMMON_KEYS and normalized not in AI_PROVIDER_KEY_NAMES and not any(part in normalized for part in COMMON_KEYS):
             continue
         value_s = str(value)
         if should_suppress_candidate(normalized, value_s):
@@ -73,11 +91,13 @@ def parse(path: Path, text: str) -> list[Signal]:
                 file_path=path,
                 line_number=resolved_line,
                 name=str(key),
-                identity_type="API key" if "key" in normalized else "automation script credential",
+                identity_type="api_key" if "key" in normalized or normalized in AI_PROVIDER_KEY_NAMES else "automation script credential",
                 source="generic config",
+                provider=AI_PROVIDER_KEY_NAMES.get(normalized),
                 evidence=f"{key}: {value_s}",
                 secret_value=value_s,
-                tags=["plaintext_secret", "hardcoded_secret"],
+                data_classes=["ai_prompts"] if normalized in AI_PROVIDER_KEY_NAMES else [],
+                tags=["plaintext_secret", "hardcoded_secret", "ai_provider"] if normalized in AI_PROVIDER_KEY_NAMES else ["plaintext_secret", "hardcoded_secret"],
                 confidence=infer_confidence(_rule_for(normalized, value_s), secret_value=value_s),
             )
         )

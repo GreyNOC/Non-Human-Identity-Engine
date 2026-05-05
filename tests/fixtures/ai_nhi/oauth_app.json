@@ -1,0 +1,5 @@
+{
+  "client_id": "wide-oauth-app",
+  "client_secret": "GNOC_FAKE_SECRET_DO_NOT_USE_OAUTH_123456",
+  "scopes": ["repo", "workflow", "mail.readwrite", "offline_access", "files.readwrite.all"]
+}

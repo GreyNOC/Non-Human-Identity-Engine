@@ -1,0 +1,7 @@
+name: prod-research-agent
+approval_required: false
+tools: [filesystem, shell, github, gdrive, database]
+permissions: [repo:write, workflow:write]
+memory_enabled: true
+context_store: data/customers/production/.env
+connectors: [slack, github, calendar]

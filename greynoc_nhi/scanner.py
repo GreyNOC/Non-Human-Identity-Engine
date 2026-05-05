@@ -8,6 +8,7 @@ from typing import Any
 from greynoc_nhi.constants import IGNORED_DIRS, MAX_FILE_BYTES, SCAN_EXTENSIONS, SCAN_FILE_NAMES
 from greynoc_nhi.custom_rules import CustomRule, load_rule_pack, scan_custom_rules
 from greynoc_nhi.ignore import is_ignored, load_greynocignore
+from greynoc_nhi.masking import redact_inline_secret
 from greynoc_nhi.parsers import PARSERS
 from greynoc_nhi.utils import read_text_safely
 
@@ -97,6 +98,6 @@ class Scanner:
                 try:
                     signals.extend(parser.parse(path, text))
                 except Exception as exc:  # Defensive parser isolation.
-                    errors.append({"file": str(path), "parser": parser.__name__, "error": str(exc)})
+                    errors.append({"file": str(path), "parser": parser.__name__, "error": redact_inline_secret(str(exc))})
             signals.extend(scan_custom_rules(path, text, self.custom_rules))
         return {"project_path": str(root), "signals": dedupe_signals(signals), "errors": errors, "scanned_files": scanned_files, "skipped_files": skipped_files, "ignore_patterns": ignore_patterns, "custom_rules": self.custom_rules}

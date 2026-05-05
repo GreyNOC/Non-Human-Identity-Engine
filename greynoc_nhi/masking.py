@@ -17,6 +17,12 @@ SECRET_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
+PRIVATE_KEY_BLOCK_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.IGNORECASE | re.DOTALL,
+)
+HIGH_ENTROPY_RE = re.compile(r"(?<![A-Za-z0-9_+=-])([A-Za-z0-9_+=-]{32,})(?![A-Za-z0-9_+=-])")
+
 
 def mask_secret(value: str) -> str:
     """Return a display-safe masked representation of a secret-like value."""
@@ -47,13 +53,37 @@ def looks_like_secret(value: str) -> bool:
     return False
 
 
+def _mask_high_entropy_match(match: re.Match[str]) -> str:
+    value = match.group(1)
+    if is_placeholder_value(value):
+        return value
+    has_alpha = bool(re.search(r"[A-Za-z]", value))
+    has_digit = bool(re.search(r"\d", value))
+    has_mixed_case = bool(re.search(r"[a-z]", value) and re.search(r"[A-Z]", value))
+    if has_alpha and (has_digit or has_mixed_case or any(char in value for char in "_+=-")):
+        return mask_secret(value)
+    return value
+
+
 def redact_inline_secret(text: str) -> str:
     """Mask obvious assignment or URL password values in evidence text."""
     safe = str(text)
+    safe = PRIVATE_KEY_BLOCK_RE.sub("[REDACTED PRIVATE KEY BLOCK]", safe)
     safe = re.sub(r"(://[^:\s/]+:)([^@\s/]+)(@)", lambda m: m.group(1) + mask_secret(m.group(2)) + m.group(3), safe)
+    safe = re.sub(
+        r"(?i)(authorization\s*[:=]\s*['\"]?bearer\s+)([A-Za-z0-9_\-.=+/]{8,})",
+        lambda m: m.group(1) + mask_secret(m.group(2)),
+        safe,
+    )
+    safe = re.sub(
+        r"(?i)(\bbearer\s+)([A-Za-z0-9_\-.=+/]{16,})",
+        lambda m: m.group(1) + mask_secret(m.group(2)),
+        safe,
+    )
     safe = re.sub(
         r"(?i)(secret|token|password|api[_-]?key|client[_-]?secret|private[_-]?key|webhook[_-]?secret)(\s*[:=]\s*)(['\"]?)([^'\"\s,}]+)",
         lambda m: m.group(1) + m.group(2) + m.group(3) + mask_secret(m.group(4)),
         safe,
     )
+    safe = HIGH_ENTROPY_RE.sub(_mask_high_entropy_match, safe)
     return safe

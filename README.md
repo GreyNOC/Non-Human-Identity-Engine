@@ -27,14 +27,45 @@ Modern apps ship with API keys, OAuth apps, service accounts, CI/CD tokens, webh
 - Browser extension manifests
 - AI agent tool configs
 - MCP server configs
+- Claude Desktop, Cursor, Windsurf, Continue, Copilot-style, `agents.*`, `crew.py`, AutoGen, CrewAI, LangChain, LlamaIndex, Semantic Kernel, LiteLLM, local model gateway, and OpenAI-compatible gateway configs where present
 - Webhook URLs and secrets
 - Package registry, deployment platform, monitoring DSN, Bearer, JWT-like, and modern SaaS token patterns
+
+## Identity Categories
+
+Scan output normalizes identities into first-class categories so teams can compare risk across tools and providers:
+
+- `ai_agent`
+- `mcp_server`
+- `model_gateway`
+- `tool_connector`
+- `oauth_app`
+- `browser_extension`
+- `ci_runner`
+- `webhook_identity`
+- `service_account`
+- `cloud_workload_identity`
+- `api_key`
+- `bot_account`
+- `deployment_identity`
+
+Where available, identities include owner, business purpose, expiry, review date, revocation hint, approval requirement, logging status, context store, memory status, tool permissions, scopes, data classes, environment, provider, source file, source line, and confidence.
+
+## AI Agent and MCP Detection
+
+The engine detects AI agent frameworks and configs such as LangChain, LlamaIndex, CrewAI, AutoGen, Semantic Kernel, `agents.yaml`, `agents.json`, `crew.py`, and related tool config files. It also detects MCP server configs including `.mcp.json`, `mcp.json`, Claude Desktop config, Cursor/Windsurf/Continue-style MCP configs, and servers that expose filesystem, shell, terminal, browser, email, Slack, GitHub, Google Drive, database, Kubernetes, Docker, Terraform, AWS, Azure, GCP, Jira, Notion, or calendar capabilities.
+
+MCP commands that execute `python`, `node`, `npx`, `uvx`, `docker`, `bash`, `sh`, `powershell`, or `cmd.exe` are treated as high-risk command runners. Agent or MCP combinations involving filesystem, shell/terminal, GitHub write scopes, sensitive memory/context stores, broad data paths, or model gateway secrets are correlated into stronger findings.
 
 ## What It Does Not Do
 
 GreyNOC NHI Risk Engine does not validate credentials, replay tokens, attempt logins, call third-party APIs with discovered keys, crack secrets, exploit systems, escalate privileges, evade detection, exfiltrate data, or perform attack automation.
 
-All detected values are masked. Full secrets are never printed in terminal output, reports, the GUI, or SQLite.
+All detected values are masked. Full secrets are never printed in terminal output, reports, the GUI, exceptions, parser errors, or SQLite.
+
+## Safe Secret Handling
+
+The engine stores only safe evidence: masked secret display, stable secret fingerprint, file path, line number, rule ID, redacted evidence, and identity metadata. It redacts bearer tokens, API keys, private keys, OAuth secrets, webhook secrets, high-entropy strings, and credential assignment lines before data enters reports or persistence. It never validates, replays, or calls out with discovered credentials.
 
 ## Install
 
@@ -105,6 +136,8 @@ Formats:
 - Markdown: developer-friendly summary
 - SARIF 2.1.0: code scanning and CI-friendly findings
 
+JSON, HTML, Markdown, and SARIF include identity type, provider, severity, confidence, reason/category, redacted evidence, source file and line, related identities when available, OWASP NHI mapping, remediation, scan trust level, and policy decision.
+
 Generate SARIF:
 
 ```bash
@@ -115,11 +148,24 @@ python -m greynoc_nhi --scan ./greynoc_nhi/data/sample_project --out ./reports -
 
 Every identity and finding includes a confidence level:
 
-- `high`: provider-specific token format, private key block, service account JSON, GitHub Actions `write-all`, `pull_request_target` with secrets, Kubernetes `cluster-admin`, Docker socket, or high-risk MCP access.
-- `medium`: generic secret-like values with useful context, broad permissions inferred from config, or likely risky automation settings.
+- `high`: provider-specific token format, private key block, service account JSON, GitHub Actions `write-all`, `pull_request_target` with secrets, Kubernetes `cluster-admin`, Docker socket, high-risk MCP access, broad browser extension background access, CI/CD deployment without approval, or strong AI-agent tool evidence.
+- `medium`: generic secret-like values with useful context, known AI framework imports/configs, broad permissions inferred from config, or likely risky automation settings.
 - `low`: weak generic patterns, placeholder-like values, test/example contexts, or values that should be reviewed but not treated as confirmed secrets.
 
 Placeholder values such as `changeme`, `replace-me`, `<token>`, `${VAR}`, and `${{ secrets.X }}` are suppressed or downgraded. The bundled `GNOC_FAKE_SECRET_DO_NOT_USE` marker remains detectable so tests and sample data keep working.
+
+Confidence is independent from severity. A weak comment-only or placeholder-style mention should not create a critical finding; severity rises when concrete identity, credential, permission, tool, and data-target signals combine.
+
+## Scan Trust and Policy Decisions
+
+Every scan includes:
+
+- `scan_trust_level`: `clean`, `action_required`, `degraded`, or `untrusted`
+- `policy_decision`: `pass`, `manual_review`, or `block`
+- `fatal_errors`: redacted fatal execution errors
+- `correlation_id`: a per-scan identifier for triage and support
+
+Parser or normalization failures mark a scan as `degraded` so missing findings are not mistaken for clean results. Fatal scanner, correlation, or rule failures mark the scan `untrusted` and default to `block`. Untrusted scans are not persisted unless the engine is explicitly configured to allow untrusted persistence.
 
 ## Baselines
 
@@ -220,6 +266,8 @@ Scores are deterministic from 0-100:
 Scoring considers plaintext secrets, production access, admin/cloud/repo permissions, broad OAuth scopes, CI/CD write-all, unpinned actions, AI/MCP tool access, browser session permissions, missing owners, missing logging, missing rotation evidence, private keys, and service account key files.
 
 Advanced correlations add weight when separate findings combine into a larger blast-radius path, such as GitHub Actions write-all plus production secrets plus unpinned actions, or unapproved AI tools plus MCP shell/filesystem access.
+
+Additional correlation examples include AI agent plus filesystem or shell tools, AI agent plus GitHub write scopes, MCP server plus shell/filesystem/browser/email/GDrive/GitHub tools, OAuth app plus broad scopes and no owner, agent memory/context stores that point at sensitive data paths, CI/CD deployment tokens without approval gates, browser extensions with `<all_urls>` and background scripts, unsigned webhooks, multiple NHIs touching the same repository/cloud/data target, and long-lived credentials with no owner or expiry.
 
 ## OWASP NHI Top 10 Mapping
 

@@ -26,13 +26,13 @@ def parse(path: Path, text: str) -> list[Signal]:
     risky = sorted({item for item in values if item in RISKY_PERMISSIONS or item == "<all_urls>" or "*://" in item})
     if not risky:
         return []
-    return [
+    signals = [
         make_signal(
             rule_id="nhi_browser_extension_risky_permissions",
             file_path=path,
             line_number=None,
             name=str(data.get("name", "Browser extension")),
-            identity_type="browser extension identity",
+            identity_type="browser_extension",
             source="browser extension manifest",
             evidence=f"Risky browser extension permissions: {', '.join(risky)}",
             permissions=risky,
@@ -41,3 +41,23 @@ def parse(path: Path, text: str) -> list[Signal]:
             tags=["browser_extension", "broad_permissions"],
         )
     ]
+    background = data.get("background")
+    has_background = isinstance(background, dict) and bool(background.get("service_worker") or background.get("scripts"))
+    if has_background and any(item == "<all_urls>" or "*://" in item for item in risky):
+        signals.append(
+            make_signal(
+                rule_id="nhi_browser_extension_broad_host_background",
+                file_path=path,
+                line_number=None,
+                name=str(data.get("name", "Browser extension")),
+                identity_type="browser_extension",
+                source="browser extension manifest",
+                evidence="Browser extension has broad host permissions and background execution",
+                permissions=risky,
+                external_access=True,
+                data_access_level="session",
+                tags=["browser_extension", "broad_permissions", "background_script"],
+                confidence="high",
+            )
+        )
+    return signals

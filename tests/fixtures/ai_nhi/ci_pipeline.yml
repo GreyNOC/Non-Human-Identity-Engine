@@ -1,0 +1,8 @@
+stages:
+  - deploy
+deploy_prod:
+  stage: deploy
+  script:
+    - deploy --token "$PROD_DEPLOY_TOKEN"
+  variables:
+    PROD_DEPLOY_TOKEN: GNOC_FAKE_SECRET_DO_NOT_USE_CI_DEPLOY_123456
