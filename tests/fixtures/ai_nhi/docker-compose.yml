@@ -1,0 +1,13 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    ports:
+      - "4000:4000"
+    environment:
+      OPENAI_API_KEY: GNOC_FAKE_SECRET_DO_NOT_USE_COMPOSE_OPENAI_123456
+      LITELLM_MASTER_KEY: GNOC_FAKE_SECRET_DO_NOT_USE_LITELLM_MASTER_123456
+  runner:
+    image: alpine
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

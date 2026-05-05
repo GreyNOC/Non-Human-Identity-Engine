@@ -86,6 +86,11 @@ class Storage:
             self._save_scan_once(scan_result)
 
     def _save_scan_once(self, scan_result: ScanResult) -> None:
+        stats = dict(scan_result.stats)
+        stats.setdefault("scan_trust_level", scan_result.scan_trust_level)
+        stats.setdefault("policy_decision", scan_result.policy_decision)
+        stats.setdefault("fatal_errors", scan_result.fatal_errors)
+        stats.setdefault("correlation_id", scan_result.correlation_id)
         with self.connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO scans VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -96,7 +101,7 @@ class Storage:
                     scan_result.completed_at,
                     scan_result.overall_score,
                     scan_result.summary,
-                    json.dumps(scan_result.stats),
+                    json.dumps(stats),
                 ),
             )
             conn.execute("DELETE FROM identities WHERE scan_id = ?", (scan_result.scan_id,))
@@ -127,6 +132,7 @@ class Storage:
                 Finding(**json.loads(row["data_json"]))
                 for row in conn.execute("SELECT data_json FROM findings WHERE scan_id = ?", (scan_id,))
             ]
+        stats = json.loads(scan["stats_json"])
         return ScanResult(
             scan_id=scan["scan_id"],
             project_path=scan["project_path"],
@@ -136,7 +142,11 @@ class Storage:
             findings=findings,
             overall_score=scan["overall_score"],
             summary=scan["summary"],
-            stats=json.loads(scan["stats_json"]),
+            stats=stats,
+            scan_trust_level=stats.get("scan_trust_level", "clean"),
+            policy_decision=stats.get("policy_decision", "pass"),
+            fatal_errors=stats.get("fatal_errors", []),
+            correlation_id=stats.get("correlation_id"),
         )
 
     def save_report(self, scan_id: str, report_type: str, path: str, created_at: str) -> None:

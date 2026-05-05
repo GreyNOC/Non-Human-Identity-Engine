@@ -17,11 +17,14 @@ def should_parse(path: Path) -> bool:
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []
+    has_signature_protection = bool(re.search(r"(signing[_-]?secret|signature|hmac|replay|timestamp|nonce|webhook[_-]?secret|whsec_)", text, re.I))
     for match in WEBHOOK_RE.finditer(text):
         url = match.group(0)
         provider = "slack" if "slack" in url else "discord" if "discord" in url else "zapier" if "zapier" in url else "make" if "make.com" in url else None
-        signals.append(make_signal(rule_id="nhi_webhook_secret_exposed", file_path=path, line_number=line_number_at_offset(text, match.start()), name="Webhook URL", identity_type="webhook secret", source="webhook parser", evidence=url, secret_value=url, provider=provider, external_access=True, tags=["webhook", "plaintext_secret"], confidence="high" if provider else "medium"))
+        signals.append(make_signal(rule_id="nhi_webhook_secret_exposed", file_path=path, line_number=line_number_at_offset(text, match.start()), name="Webhook URL", identity_type="webhook_identity", source="webhook parser", evidence=url, secret_value=url, provider=provider, external_access=True, tags=["webhook", "plaintext_secret"], confidence="high" if provider else "medium"))
+        if not has_signature_protection:
+            signals.append(make_signal(rule_id="nhi_webhook_missing_signature_protection", file_path=path, line_number=line_number_at_offset(text, match.start()), name="Webhook without signature protection", identity_type="webhook_identity", source="webhook parser", evidence="Webhook URL found without signing secret, HMAC, timestamp, or replay protection evidence", provider=provider, external_access=True, tags=["webhook", "missing_signature"], confidence="medium"))
     for number, line in enumerate(text.splitlines(), 1):
         if re.search(r"(github|stripe).*webhook.*secret|webhook_secret|whsec_", line, re.I):
-            signals.append(make_signal(rule_id="nhi_webhook_secret_exposed", file_path=path, line_number=number, name="Webhook secret", identity_type="webhook secret", source="webhook parser", evidence=line.strip(), tags=["webhook", "plaintext_secret"]))
+            signals.append(make_signal(rule_id="nhi_webhook_secret_exposed", file_path=path, line_number=number, name="Webhook secret", identity_type="webhook_identity", source="webhook parser", evidence=line.strip(), tags=["webhook", "plaintext_secret"]))
     return signals

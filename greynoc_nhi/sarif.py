@@ -33,6 +33,7 @@ def sarif_dict(scan: ScanResult) -> dict:
                     "severity": finding.severity,
                     "risk_score": finding.risk_score,
                     "confidence": finding.confidence,
+                    "category": finding.category,
                     "owasp_nhi_refs": finding.owasp_nhi_refs,
                     "control_hints": finding.control_hints,
                 },
@@ -58,8 +59,10 @@ def sarif_dict(scan: ScanResult) -> dict:
                     "severity": finding.severity,
                     "risk_score": finding.risk_score,
                     "confidence": finding.confidence,
+                    "category": finding.category,
                     "priority": finding.priority,
                     "baseline_status": finding.baseline_status,
+                    "related_identities": finding.related_identities,
                     "owasp_nhi_refs": finding.owasp_nhi_refs,
                 },
             }
@@ -77,6 +80,11 @@ def sarif_dict(scan: ScanResult) -> dict:
                     }
                 },
                 "results": results,
+                "properties": {
+                    "scan_trust_level": scan.scan_trust_level,
+                    "policy_decision": scan.policy_decision,
+                    "correlation_id": scan.correlation_id,
+                },
             }
         ],
     }

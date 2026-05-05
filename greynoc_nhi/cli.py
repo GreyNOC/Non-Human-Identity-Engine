@@ -39,6 +39,8 @@ def print_summary(result, reports: dict[str, Path] | None = None) -> None:
     print("Scan completed")
     print(f"Overall score: {result.overall_score}")
     print(f"Severity label: {severity_label(result.overall_score)}")
+    print(f"Scan trust level: {result.scan_trust_level}")
+    print(f"Policy decision: {result.policy_decision}")
     print(f"Identities found: {len(result.identities)}")
     print(f"Findings count: {len(result.findings)}")
     print(f"Advanced correlations: {result.stats.get('advanced_correlations', 0)}")

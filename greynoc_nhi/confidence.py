@@ -16,6 +16,13 @@ HIGH_CONFIDENCE_RULES = {
     "nhi_mcp_filesystem_broad_access",
     "nhi_mcp_server_high_risk_tool_access",
     "nhi_ai_mcp_privilege_bridge",
+    "nhi_ai_agent_filesystem_access",
+    "nhi_ai_agent_github_write_access",
+    "nhi_browser_extension_broad_host_background",
+    "nhi_ci_deployment_without_approval",
+    "nhi_production_ai_key_in_env",
+    "nhi_webhook_missing_signature_protection",
+    "nhi_shared_target_exposure",
     "nhi_untrusted_ci_deploy_path",
     "nhi_shadow_admin_path",
 }

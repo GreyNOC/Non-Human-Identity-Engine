@@ -27,6 +27,7 @@ def _signal(
     scopes: list[str] | None = None,
     tools: list[str] | None = None,
     tags: list[str] | None = None,
+    related_identities: list[str] | None = None,
     admin_access: bool = False,
     production_access: bool = False,
     external_access: bool = False,
@@ -45,6 +46,7 @@ def _signal(
         scopes=scopes or [],
         tools=tools or [],
         tags=[rule_id, "advanced_correlation", *(tags or [])],
+        related_identities=related_identities or [],
         admin_access=admin_access,
         production_access=production_access,
         external_access=external_access,
@@ -126,8 +128,32 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
         )
 
     has_ci_broad = any("ci_cd" in item.tags and (item.admin_access or "write-all" in item.permissions) for item in identities)
-    has_deploy_secret = any(item.production_access and ("ci_cd" in item.tags or item.identity_type == "deployment token") for item in identities)
+    has_deploy_secret = any(item.production_access and ("ci_cd" in item.tags or item.identity_type == "deployment_identity") for item in identities)
     has_unpinned_action = any("third_party" in item.tags and "unpinned" in item.tags for item in identities)
+    ci_deploy_without_gate = [
+        item
+        for item in identities
+        if item.production_access
+        and ("ci_cd" in item.tags or item.identity_type in {"ci_runner", "deployment_identity"})
+        and item.approval_required is not True
+        and (item.admin_access or any("deploy" in permission.lower() or "write-all" in permission.lower() for permission in item.permissions))
+    ]
+    if has_ci_broad and ci_deploy_without_gate:
+        signals.append(
+            _signal(
+                rule_id="nhi_ci_deployment_without_approval",
+                project_path=project_path,
+                name="CI/CD deployment without approval",
+                identity_type="deployment_identity",
+                evidence=f"{len(ci_deploy_without_gate)} CI/CD deployment-capable identities combine broad token permission with no approval evidence.",
+                permissions=["write-all", "deployment"],
+                admin_access=True,
+                production_access=True,
+                approval_required=False,
+                related_identities=[item.id for item in ci_deploy_without_gate],
+                tags=["ci_cd", "deployment_path", "approval_gate"],
+            )
+        )
     if has_ci_broad and has_deploy_secret and has_unpinned_action:
         signals.append(
             _signal(
@@ -235,6 +261,31 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
                 tags=["production", "approval_gate"],
             )
         )
+
+    target_groups: dict[str, list[NonHumanIdentity]] = defaultdict(list)
+    for identity in identities:
+        for target in sorted(set([identity.provider or "", identity.data_access_level if identity.data_access_level != "unknown" else "", *identity.data_classes])):
+            if target and target.lower() not in {"unknown", "none"}:
+                target_groups[target.lower()].append(identity)
+    for target, group in target_groups.items():
+        unique_types = {item.identity_type for item in group}
+        if len(group) >= 3 and len(unique_types) >= 2 and any(item.admin_access or item.production_access or item.has_secret for item in group):
+            signals.append(
+                _signal(
+                    rule_id="nhi_shared_target_exposure",
+                    project_path=project_path,
+                    name=f"Shared NHI target: {target}",
+                    identity_type="risk correlation",
+                    evidence=f"{len(group)} identities across {len(unique_types)} NHI types touch target '{target}'.",
+                    admin_access=any(item.admin_access for item in group),
+                    production_access=any(item.production_access for item in group),
+                    external_access=any(item.external_access for item in group),
+                    data_access_level="customer" if any(item.data_access_level == "customer" for item in group) else "unknown",
+                    related_identities=[item.id for item in group],
+                    tags=["shared_target", "blast_radius"],
+                )
+            )
+            break
 
     gitignore_path = Path(project_path) / ".gitignore"
     if not gitignore_path.exists() and any(Path(file_path).name.startswith(".env") for file_path in secret_files):

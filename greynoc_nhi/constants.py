@@ -34,10 +34,22 @@ SCAN_FILE_NAMES = {
     "requirements.txt",
     "pyproject.toml",
     "manifest.json",
+    ".mcp.json",
     "mcp.json",
     "mcp_config.json",
     "claude_desktop_config.json",
     "cursor_mcp.json",
+    "agents.yaml",
+    "agents.yml",
+    "agents.json",
+    "crew.py",
+    "autogen_config.json",
+    "litellm_config.yaml",
+    "litellm_config.yml",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "azure-pipelines.yml",
+    ".gitlab-ci.yml",
 }
 
 SCAN_EXTENSIONS = {

@@ -15,6 +15,25 @@ def should_parse(path: Path) -> bool:
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []
+    lower = text.lower()
+    if any(marker in lower for marker in ["litellm", "openai-compatible", "openai_compatible", "ollama", "vllm", "text-generation-inference", "model-gateway", "model_gateway"]):
+        signals.append(
+            make_signal(
+                rule_id="nhi_model_gateway_detected",
+                file_path=path,
+                line_number=next((i for i, l in enumerate(text.splitlines(), 1) if any(marker in l.lower() for marker in ["litellm", "ollama", "vllm", "openai"])), None),
+                name="Docker model gateway service",
+                identity_type="model_gateway",
+                source="docker compose",
+                evidence="Docker service appears to run an AI model gateway or OpenAI-compatible API",
+                provider="litellm" if "litellm" in lower else None,
+                external_access=True,
+                production_access="prod" in lower or "production" in lower,
+                data_classes=["ai_prompts"],
+                tags=["model_gateway", "docker"],
+                confidence="high",
+            )
+        )
     for number, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
         if re.match(r"^(ENV|ARG)\s+.*(SECRET|TOKEN|PASSWORD|API_KEY|PRIVATE_KEY)", stripped, re.I):

@@ -14,16 +14,23 @@ class NonHumanIdentity:
     source: str
     file_path: str | None = None
     line_number: int | None = None
+    source_file: str | None = None
+    source_line: int | None = None
     owner: str | None = None
+    business_purpose: str | None = None
     environment: str | None = None
     provider: str | None = None
     created_at: str | None = None
     last_used_at: str | None = None
     expires_at: str | None = None
+    review_due_date: str | None = None
+    revocation_hint: str | None = None
     secret_age_days: int | None = None
     permissions: list[str] = field(default_factory=list)
     scopes: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
+    tool_permissions: list[str] = field(default_factory=list)
+    data_classes: list[str] = field(default_factory=list)
     has_secret: bool = False
     secret_fingerprint: str | None = None
     masked_secret: str | None = None
@@ -34,9 +41,12 @@ class NonHumanIdentity:
     logging_enabled: bool | None = None
     rotation_status: str | None = None
     approval_required: bool | None = None
+    context_store: str | None = None
+    memory_enabled: bool | None = None
     evidence: list[str] = field(default_factory=list)
     raw_reference: str | None = None
     tags: list[str] = field(default_factory=list)
+    related_identities: list[str] = field(default_factory=list)
     confidence: str = "medium"
 
     def to_dict(self) -> dict[str, Any]:
@@ -65,6 +75,7 @@ class Finding:
     control_hints: list[str]
     created_at: str
     confidence: str = "medium"
+    related_identities: list[str] = field(default_factory=list)
     baseline_status: str = "new"
     baseline_key: str | None = None
 
@@ -83,6 +94,10 @@ class ScanResult:
     overall_score: int
     summary: str
     stats: dict[str, Any]
+    scan_trust_level: str = "clean"
+    policy_decision: str = "pass"
+    fatal_errors: list[str] = field(default_factory=list)
+    correlation_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,4 +110,8 @@ class ScanResult:
             "overall_score": self.overall_score,
             "summary": self.summary,
             "stats": self.stats,
+            "scan_trust_level": self.scan_trust_level,
+            "policy_decision": self.policy_decision,
+            "fatal_errors": self.fatal_errors,
+            "correlation_id": self.correlation_id,
         }

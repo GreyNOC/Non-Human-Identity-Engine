@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "${workspaceFolder}", "/home/user"]
+    },
+    "shell": {
+      "command": "python",
+      "args": ["tools/shell_server.py"]
+    },
+    "github": {
+      "command": "node",
+      "args": ["github-mcp.js"],
+      "env": {
+        "GITHUB_TOKEN": "GNOC_FAKE_SECRET_DO_NOT_USE_MCP_TOKEN_123456"
+      }
+    }
+  }
+}
