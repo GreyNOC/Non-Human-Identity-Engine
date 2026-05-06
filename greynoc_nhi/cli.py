@@ -38,6 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diff", action="store_true", help="Scan only files changed in <base>...HEAD (default base origin/main)")
     parser.add_argument("--diff-staged", action="store_true", help="Scan only files staged for commit (use in pre-commit hooks)")
     parser.add_argument("--base", default="origin/main", help="Base ref for --diff (default origin/main)")
+    parser.add_argument("--install-hook", metavar="REPO", nargs="?", const=".", help="Install a git pre-commit hook into REPO (default: current directory)")
+    parser.add_argument("--uninstall-hook", metavar="REPO", nargs="?", const=".", help="Remove the GreyNOC NHI pre-commit hook from REPO")
+    parser.add_argument("--install-hook-framework", action="store_true", help="Also write .pre-commit-hooks.yaml when installing the hook")
+    parser.add_argument("--install-hook-force", action="store_true", help="Reinstall the hook even if already present")
     return parser
 
 
@@ -110,6 +114,34 @@ def main(argv: list[str] | None = None) -> int:
     if args.clear_db:
         clear_all(args.db)
         print("Local GreyNOC NHI database cleared.")
+        return 0
+    if args.install_hook is not None:
+        from greynoc_nhi.hooks import install_pre_commit_hook
+        try:
+            outcome = install_pre_commit_hook(
+                args.install_hook,
+                framework=bool(args.install_hook_framework),
+                force=bool(args.install_hook_force),
+            )
+        except RuntimeError as exc:
+            print(f"Hook install failed: {exc}")
+            return 2
+        print(f"Installed pre-commit hook at {outcome.hook_path}")
+        if outcome.chained_existing:
+            print("Existing pre-commit hook preserved as pre-commit.greynoc-chained")
+        if outcome.overwrote:
+            print("Reinstalled GreyNOC pre-commit hook")
+        if outcome.framework_path:
+            print(f"Wrote pre-commit framework manifest: {outcome.framework_path}")
+        return 0
+    if args.uninstall_hook is not None:
+        from greynoc_nhi.hooks import uninstall_pre_commit_hook
+        try:
+            removed = uninstall_pre_commit_hook(args.uninstall_hook)
+        except RuntimeError as exc:
+            print(f"Hook removal failed: {exc}")
+            return 2
+        print("Hook removed." if removed else "No GreyNOC NHI hook installed; nothing to remove.")
         return 0
     engine = Engine(args.db, rule_pack_path=args.rules)
     if args.load_samples:
