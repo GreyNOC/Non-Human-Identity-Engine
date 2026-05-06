@@ -17,6 +17,7 @@ from . import (
     package_json,
     python_requirements,
     terraform,
+    terraform_state,
     webhooks,
 )
 
@@ -26,6 +27,7 @@ PARSERS = [
     github_actions,
     docker,
     terraform,
+    terraform_state,
     kubernetes,
     package_json,
     oauth_configs,

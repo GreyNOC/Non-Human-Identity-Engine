@@ -24,7 +24,13 @@ from greynoc_nhi.utils import read_text_safely
 def should_scan_file(path: Path) -> bool:
     """Return True when a file is small and relevant enough to scan."""
     name = path.name.lower()
-    if name in SCAN_FILE_NAMES or path.suffix.lower() in SCAN_EXTENSIONS or name.startswith(".env"):
+    if (
+        name in SCAN_FILE_NAMES
+        or path.suffix.lower() in SCAN_EXTENSIONS
+        or name.startswith(".env")
+        or name.endswith(".tfstate")
+        or name.endswith(".tfstate.backup")
+    ):
         try:
             return path.stat().st_size <= MAX_FILE_BYTES
         except OSError:
