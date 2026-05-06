@@ -112,14 +112,108 @@ def _table_rows_identities(identities: list[NonHumanIdentity]) -> str:
 def _table_rows_findings(findings: list[Finding]) -> str:
     rows = []
     for finding in findings:
+        severity = html.escape(finding.severity.lower())
         rows.append(
-            "<tr>"
+            f'<tr data-severity="{severity}">'
             f"<td>{_badge(finding.severity)}</td><td>{finding.risk_score}</td><td>{html.escape(finding.confidence)}</td><td>{html.escape(finding.baseline_status)}</td><td>{html.escape(finding.rule_id)}</td>"
             f"<td>{html.escape(finding.category)}</td><td>{html.escape(finding.file_path or '-')}</td><td>{finding.line_number or '-'}</td>"
             f"<td>{html.escape('; '.join(finding.evidence))}</td><td>{html.escape(_join(finding.related_identities))}</td><td>{html.escape(finding.why_it_matters)}</td><td>{html.escape(finding.remediation)}</td><td>{html.escape(_join(finding.control_hints))}</td><td>{html.escape(_join(finding.owasp_nhi_refs))}</td>"
             "</tr>"
         )
     return "\n".join(rows) or '<tr><td colspan="14">No findings found.</td></tr>'
+
+
+INTERACTIVE_JS = """
+<script>
+(function () {
+  function makeSortable(table) {
+    var headers = table.querySelectorAll('thead th');
+    headers.forEach(function (th, idx) {
+      th.style.cursor = 'pointer';
+      th.title = 'Click to sort';
+      var direction = 1;
+      th.addEventListener('click', function () {
+        var tbody = table.tBodies[0];
+        if (!tbody) return;
+        var rows = Array.prototype.slice.call(tbody.rows);
+        rows.sort(function (a, b) {
+          var ax = (a.cells[idx] || {}).innerText || '';
+          var bx = (b.cells[idx] || {}).innerText || '';
+          var an = parseFloat(ax);
+          var bn = parseFloat(bx);
+          if (!isNaN(an) && !isNaN(bn)) return (an - bn) * direction;
+          return ax.localeCompare(bx) * direction;
+        });
+        rows.forEach(function (row) { tbody.appendChild(row); });
+        direction = -direction;
+      });
+    });
+  }
+  function attachFilters(table) {
+    if (!table.parentNode) return;
+    var wrap = document.createElement('div');
+    wrap.className = 'gnoc-filters';
+    wrap.style.margin = '8px 0';
+    var search = document.createElement('input');
+    search.type = 'search';
+    search.placeholder = 'Search this table...';
+    search.style.padding = '6px 8px';
+    search.style.marginRight = '8px';
+    search.style.minWidth = '240px';
+    var sev = document.createElement('select');
+    var options = ['all', 'critical', 'high', 'medium', 'low'];
+    options.forEach(function (opt) {
+      var o = document.createElement('option');
+      o.value = opt;
+      o.textContent = opt === 'all' ? 'All severities' : opt;
+      sev.appendChild(o);
+    });
+    sev.style.padding = '6px 8px';
+    var count = document.createElement('span');
+    count.style.marginLeft = '12px';
+    count.style.color = '#52616a';
+    wrap.appendChild(search);
+    wrap.appendChild(sev);
+    wrap.appendChild(count);
+    table.parentNode.insertBefore(wrap, table);
+    function apply() {
+      var q = search.value.toLowerCase();
+      var s = sev.value;
+      var visible = 0;
+      var tbody = table.tBodies[0];
+      if (!tbody) return;
+      Array.prototype.slice.call(tbody.rows).forEach(function (row) {
+        var rowSev = (row.getAttribute('data-severity') || '').toLowerCase();
+        var matchSev = s === 'all' || rowSev === s;
+        var matchSearch = !q || row.innerText.toLowerCase().indexOf(q) !== -1;
+        var show = matchSev && matchSearch;
+        row.style.display = show ? '' : 'none';
+        if (show) visible++;
+      });
+      count.textContent = visible + ' row(s) shown';
+    }
+    search.addEventListener('input', apply);
+    sev.addEventListener('change', apply);
+    apply();
+  }
+  function init() {
+    var tables = document.querySelectorAll('table');
+    tables.forEach(function (table) {
+      makeSortable(table);
+      var hasSeverity = table.querySelector('tbody tr[data-severity]');
+      if (hasSeverity) {
+        attachFilters(table);
+      }
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+"""
 
 
 def generate_html_report(scan: ScanResult, out_dir: str | Path | None = None) -> Path:
@@ -174,7 +268,7 @@ footer {{ color:#52616a; font-size:12px; margin-top:34px; border-top:1px solid #
 <section><h2>30-Day Remediation Plan</h2><ol><li><strong>Day 0-3:</strong> rotate exposed critical secrets and remove write-all/admin paths.</li><li><strong>Day 4-10:</strong> revoke, rotate, and re-scope OAuth, GitHub, cloud, Docker, Kubernetes, and webhook identities.</li><li><strong>Day 11-20:</strong> harden CI/CD and cloud deployments.</li><li><strong>Day 21-30:</strong> assign owners, document rotation, enable logging, and add approval gates.</li></ol></section>
 <section><h2>Evidence Appendix</h2><p>All evidence is masked. Full secrets are never displayed, validated, or used.</p></section>
 <footer>Safety disclaimer: local defensive scan only. No credential validation performed. No external systems accessed. Generated {html.escape(utc_now())}.</footer>
-</main></body></html>"""
+</main>{INTERACTIVE_JS}</body></html>"""
     out.write_text(body, encoding="utf-8")
     return out
 

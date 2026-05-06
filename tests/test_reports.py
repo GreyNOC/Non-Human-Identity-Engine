@@ -15,3 +15,6 @@ def test_report_generation_creates_html():
     text = report.read_text(encoding="utf-8")
     assert "GreyNOC Non-Human Identity Risk Engine" in text
     assert "GNOC_FAKE_SECRET_DO_NOT_USE" not in text
+    assert 'data-severity=' in text
+    assert "<script>" in text
+    assert "Search this table..." in text
