@@ -24,10 +24,20 @@ from greynoc_nhi.utils import read_text_safely
 def should_scan_file(path: Path) -> bool:
     """Return True when a file is small and relevant enough to scan."""
     name = path.name.lower()
+    normalized = str(path).replace("\\", "/").lower()
     pulumi_stack = (
         name.startswith("pulumi.")
         and (name.endswith(".yaml") or name.endswith(".yml"))
     )
+    package_cred_path = (
+        normalized.endswith(".cargo/credentials")
+        or normalized.endswith(".cargo/credentials.toml")
+        or normalized.endswith(".cargo/config.toml")
+        or normalized.endswith(".cargo/config")
+        or normalized.endswith(".gradle/init.gradle")
+        or normalized.endswith(".gradle/gradle.properties")
+    )
+    package_cred_name = name in {".npmrc", ".pypirc", ".netrc", "gradle.properties"}
     if (
         name in SCAN_FILE_NAMES
         or path.suffix.lower() in SCAN_EXTENSIONS
@@ -35,6 +45,8 @@ def should_scan_file(path: Path) -> bool:
         or name.endswith(".tfstate")
         or name.endswith(".tfstate.backup")
         or pulumi_stack
+        or package_cred_path
+        or package_cred_name
     ):
         try:
             return path.stat().st_size <= MAX_FILE_BYTES
