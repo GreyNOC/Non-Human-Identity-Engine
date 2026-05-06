@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
 from greynoc_nhi.parsers.base import Signal, make_signal
 from greynoc_nhi.utils import line_number_at_offset, line_number_for, parse_json_safely
 
-
 def should_parse(path: Path) -> bool:
     return path.suffix.lower() in {".json", ".txt", ".env", ".yaml", ".yml", ".tf", ".py", ".js", ".ts"}
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []

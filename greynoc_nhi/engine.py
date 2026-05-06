@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from greynoc_nhi.advanced import synthesize_advanced_signals
 from greynoc_nhi.baseline import apply_baseline
+from greynoc_nhi.cache import ParserCache
 from greynoc_nhi.confidence import normalize_confidence
 from greynoc_nhi.custom_rules import custom_rule_templates
 from greynoc_nhi.masking import fingerprint_secret, mask_secret, redact_inline_secret
@@ -234,8 +235,15 @@ class Engine:
         db_path: str | Path | None = None,
         rule_pack_path: str | Path | None = None,
         allow_untrusted_persist: bool = False,
+        *,
+        cache_enabled: bool = True,
     ) -> None:
-        self.scanner = Scanner(rule_pack_path=rule_pack_path)
+        cache_path: Path | None = None
+        if cache_enabled and db_path:
+            db_p = Path(db_path)
+            cache_path = db_p.with_name(db_p.stem + "_cache.sqlite3")
+        self.cache = ParserCache(cache_path) if cache_path else None
+        self.scanner = Scanner(rule_pack_path=rule_pack_path, cache=self.cache)
         self.storage = Storage(db_path) if db_path else None
         self.allow_untrusted_persist = allow_untrusted_persist
 
@@ -392,6 +400,8 @@ class Engine:
                 "correlation_id": correlation_id,
                 "history": history_stats,
                 "diff": diff_stats,
+                "cache_hits": raw.get("cache_hits", 0),
+                "cache_misses": raw.get("cache_misses", 0),
             },
             scan_trust_level=scan_trust_level,
             policy_decision=policy_decision,

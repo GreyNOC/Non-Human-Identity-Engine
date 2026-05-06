@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
 from greynoc_nhi.parsers.base import Signal, make_signal
 
-
 def should_parse(path: Path) -> bool:
     return path.suffix.lower() == ".tf"
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []

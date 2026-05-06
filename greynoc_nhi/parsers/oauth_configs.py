@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 from pathlib import Path
 
 from greynoc_nhi.confidence import should_suppress_candidate
@@ -31,10 +33,8 @@ BROAD_SCOPES = {
     "delete",
 }
 
-
 def should_parse(path: Path) -> bool:
     return path.suffix.lower() in {".json", ".yaml", ".yml"} and ("oauth" in path.name.lower() or "app" in path.name.lower() or "config" in path.name.lower())
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []

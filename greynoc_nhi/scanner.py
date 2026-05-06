@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from greynoc_nhi.cache import ParserCache, content_hash, parser_version_string, rewrite_file_path
 from greynoc_nhi.constants import IGNORED_DIRS, MAX_FILE_BYTES, SCAN_EXTENSIONS, SCAN_FILE_NAMES
 from greynoc_nhi.custom_rules import CustomRule, load_rule_pack, scan_custom_rules
 from greynoc_nhi.git_history import (
@@ -102,9 +103,16 @@ def dedupe_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
 class Scanner:
     """Local recursive scanner."""
 
-    def __init__(self, ignored_dirs: set[str] | None = None, rule_pack_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        ignored_dirs: set[str] | None = None,
+        rule_pack_path: str | Path | None = None,
+        cache: ParserCache | None = None,
+    ) -> None:
         self.ignored_dirs = ignored_dirs or IGNORED_DIRS
         self.custom_rules: list[CustomRule] = load_rule_pack(rule_pack_path)
+        self.cache = cache
+        self._parser_version = parser_version_string(PARSERS)
 
     def scan(
         self,
@@ -123,6 +131,8 @@ class Scanner:
         if only_paths is not None:
             allowed = {p.resolve() for p in only_paths}
             candidates = [p for p in candidates if p.resolve() in allowed]
+        cache_hits = 0
+        cache_misses = 0
         for path in candidates:
             text = read_text_safely(path)
             if text is None:
@@ -134,13 +144,38 @@ class Scanner:
             if parsers is None:
                 parsers = [parser for parser in PARSERS if parser.should_parse(path)]
                 parser_cache[cache_key] = parsers
-            for parser in parsers:
-                try:
-                    signals.extend(parser.parse(path, text))
-                except Exception as exc:  # Defensive parser isolation.
-                    errors.append({"file": str(path), "parser": parser.__name__, "error": redact_inline_secret(str(exc))})
+            file_signals: list[dict[str, Any]] = []
+            content_sha: str | None = None
+            cached_signals: list[dict[str, Any]] | None = None
+            if self.cache is not None and parsers:
+                content_sha = content_hash(text)
+                cached_signals = self.cache.get(content_sha, self._parser_version)
+            if cached_signals is not None:
+                file_signals.extend(rewrite_file_path(cached_signals, str(path)))
+                cache_hits += 1
+            else:
+                if parsers:
+                    cache_misses += 1
+                for parser in parsers:
+                    try:
+                        file_signals.extend(parser.parse(path, text))
+                    except Exception as exc:  # Defensive parser isolation.
+                        errors.append({"file": str(path), "parser": parser.__name__, "error": redact_inline_secret(str(exc))})
+                if self.cache is not None and content_sha is not None and parsers:
+                    self.cache.put(content_sha, self._parser_version, file_signals)
+            signals.extend(file_signals)
             signals.extend(scan_custom_rules(path, text, self.custom_rules))
-        return {"project_path": str(root), "signals": dedupe_signals(signals), "errors": errors, "scanned_files": scanned_files, "skipped_files": skipped_files, "ignore_patterns": ignore_patterns, "custom_rules": self.custom_rules}
+        return {
+            "project_path": str(root),
+            "signals": dedupe_signals(signals),
+            "errors": errors,
+            "scanned_files": scanned_files,
+            "skipped_files": skipped_files,
+            "ignore_patterns": ignore_patterns,
+            "custom_rules": self.custom_rules,
+            "cache_hits": cache_hits,
+            "cache_misses": cache_misses,
+        }
 
     def scan_history(
         self,

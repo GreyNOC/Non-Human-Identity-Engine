@@ -42,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--uninstall-hook", metavar="REPO", nargs="?", const=".", help="Remove the GreyNOC NHI pre-commit hook from REPO")
     parser.add_argument("--install-hook-framework", action="store_true", help="Also write .pre-commit-hooks.yaml when installing the hook")
     parser.add_argument("--install-hook-force", action="store_true", help="Reinstall the hook even if already present")
+    parser.add_argument("--no-cache", action="store_true", help="Disable the per-file parser output cache")
+    parser.add_argument("--clear-cache", action="store_true", help="Drop all cached parser results before scanning")
     return parser
 
 
@@ -143,7 +145,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print("Hook removed." if removed else "No GreyNOC NHI hook installed; nothing to remove.")
         return 0
-    engine = Engine(args.db, rule_pack_path=args.rules)
+    engine = Engine(args.db, rule_pack_path=args.rules, cache_enabled=not args.no_cache)
+    if args.clear_cache and engine.cache is not None:
+        engine.cache.clear()
     if args.load_samples:
         result, reports = with_cli_indicator(
             "Scanning sample project",

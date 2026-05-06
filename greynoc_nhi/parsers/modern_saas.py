@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
@@ -36,10 +38,8 @@ _BEARER_RE = re.compile(r"\bAuthorization\s*[:=]\s*['\"]?Bearer\s+([A-Za-z0-9_\-
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b")
 _REGISTRY_AUTH_RE = re.compile(r"(?i)(?:_authToken|auth)\s*[:=]\s*['\"]?([A-Za-z0-9_\-/+=]{16,})")
 
-
 def should_parse(path: Path) -> bool:
     return path.name.startswith(".env") or path.suffix.lower() in TEXT_EXTENSIONS or path.name.lower() in {".npmrc", ".yarnrc", "config.json"}
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []
