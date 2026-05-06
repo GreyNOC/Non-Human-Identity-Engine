@@ -25,12 +25,23 @@ def should_scan_file(path: Path) -> bool:
 
 
 def iter_scan_files(project_path: str | Path, ignored_dirs: set[str] | None = None, ignore_patterns: list[str] | None = None) -> list[Path]:
-    """Recursively list scan candidates while skipping noisy dependency folders."""
+    """Recursively list scan candidates while skipping noisy dependency folders.
+
+    Symlinks (file or directory) are never followed. This keeps the scan strictly
+    inside the project root, prevents symlink loops from hanging the scanner, and
+    avoids leaking redacted-but-real evidence from outside paths (e.g. /etc,
+    ~/.ssh, ~/.aws) into reports, SQLite, or SARIF output.
+    """
     ignored = ignored_dirs or IGNORED_DIRS
     root = Path(project_path)
+    try:
+        root_resolved = root.resolve()
+    except OSError:
+        return []
     patterns = ignore_patterns or []
     files: list[Path] = []
     stack = [root]
+    visited: set[Path] = set()
     while stack:
         current = stack.pop()
         try:
@@ -38,6 +49,19 @@ def iter_scan_files(project_path: str | Path, ignored_dirs: set[str] | None = No
         except OSError:
             continue
         for path in children:
+            if path.is_symlink():
+                continue
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            try:
+                resolved.relative_to(root_resolved)
+            except ValueError:
+                continue
+            if resolved in visited:
+                continue
+            visited.add(resolved)
             if is_ignored(path, root, patterns):
                 continue
             if path.is_dir():

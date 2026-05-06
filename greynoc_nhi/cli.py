@@ -9,7 +9,6 @@ from pathlib import Path
 from greynoc_nhi.baseline import has_new_findings_at_or_above, write_baseline
 from greynoc_nhi.constants import DEFAULT_DB_PATH
 from greynoc_nhi.engine import Engine
-from greynoc_nhi.gui import launch_gui
 from greynoc_nhi.indicators import with_cli_indicator
 from greynoc_nhi.reports import generate_all_reports, generate_json_report
 from greynoc_nhi.sarif import generate_sarif_report
@@ -80,6 +79,12 @@ def exit_code_for_baseline(scan_result, args) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.gui:
+        try:
+            from greynoc_nhi.gui import launch_gui
+        except ImportError as exc:
+            print(f"GUI requires Tkinter, which is not available: {exc}")
+            print("Install your platform's Tk package (e.g. python3-tk) or use the CLI.")
+            return 2
         launch_gui()
         return 0
     if args.clear_db:
