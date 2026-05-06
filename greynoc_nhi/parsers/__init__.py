@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from . import (
     ai_agents,
+    bot_configs,
     browser_extensions,
     cloud_credentials,
     docker,
@@ -42,6 +43,7 @@ PARSERS = [
     cloud_credentials,
     browser_extensions,
     ai_agents,
+    bot_configs,
     mcp_configs,
     modern_saas,
     webhooks,

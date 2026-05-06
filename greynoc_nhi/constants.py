@@ -53,6 +53,13 @@ SCAN_FILE_NAMES = {
     "cdk.json",
     "cdk.context.json",
     "pulumi.yaml",
+    "renovate.json",
+    "renovate.json5",
+    ".renovaterc",
+    ".renovaterc.json",
+    ".renovaterc.json5",
+    "dependabot.yml",
+    "dependabot.yaml",
 }
 
 SCAN_EXTENSIONS = {
