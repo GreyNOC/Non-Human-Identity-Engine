@@ -25,7 +25,12 @@ def load_greynocignore(project_root: str | Path) -> list[str]:
 def is_ignored(path: Path, root: Path, patterns: list[str]) -> bool:
     if not patterns:
         return False
-    rel = path.resolve().relative_to(root.resolve()).as_posix()
+    try:
+        rel = path.resolve().relative_to(root.resolve()).as_posix()
+    except (OSError, ValueError):
+        # Path resolves outside the project root (e.g. via a symlink) or
+        # cannot be resolved. Treat as ignored so it never enters the scan.
+        return True
     name = path.name
     for pattern in patterns:
         if pattern == name or pattern == rel:

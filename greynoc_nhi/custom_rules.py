@@ -13,26 +13,63 @@ from greynoc_nhi.masking import looks_like_secret
 from greynoc_nhi.parsers.base import Signal, make_signal
 
 
+# Hard caps on user-supplied patterns. The stdlib `re` module has no timeout,
+# so a malicious or careless rule pack can hang every CI scan with a classic
+# ReDoS shape like `(a+)+$` (confirmed: ~88s on 30 chars in testing). Reject
+# anything that looks dangerous at load time rather than at scan time.
+_MAX_PATTERN_LENGTH = 512
+_REDOS_SHAPES = re.compile(
+    r"\([^)]*[+*][^)]*\)[+*?]"  # nested unbounded quantifier: (a+)+, (.*)*, (x+)?
+    r"|"
+    r"\([^)]*\|[^)]*\)[+*]"  # alternation under unbounded quantifier: (a|a)+
+)
+
+
 @dataclass(frozen=True)
 class CustomRule:
     id: str
     title: str
     severity: str
     pattern: str
+    compiled: re.Pattern[str]
     identity_type: str
     provider: str | None
     remediation: str
     confidence: str
 
 
+def _safe_compile(pattern: str) -> re.Pattern[str] | None:
+    """Compile a user-supplied pattern, or return None if unsafe/invalid."""
+    if not isinstance(pattern, str) or not pattern:
+        return None
+    if len(pattern) > _MAX_PATTERN_LENGTH:
+        return None
+    if _REDOS_SHAPES.search(pattern):
+        return None
+    try:
+        return re.compile(pattern)
+    except re.error:
+        return None
+
+
 def load_rule_pack(path: str | Path | None) -> list[CustomRule]:
     if not path:
         return []
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return []
     rules = data.get("rules", []) if isinstance(data, dict) else []
     loaded: list[CustomRule] = []
     for rule in rules:
         if not isinstance(rule, dict) or not rule.get("id") or not rule.get("pattern"):
+            continue
+        compiled = _safe_compile(str(rule["pattern"]))
+        if compiled is None:
             continue
         loaded.append(
             CustomRule(
@@ -40,6 +77,7 @@ def load_rule_pack(path: str | Path | None) -> list[CustomRule]:
                 title=str(rule.get("title", rule["id"])),
                 severity=str(rule.get("severity", "medium")).lower(),
                 pattern=str(rule["pattern"]),
+                compiled=compiled,
                 identity_type=str(rule.get("identity_type", "custom token")),
                 provider=str(rule["provider"]) if rule.get("provider") else None,
                 remediation=str(rule.get("remediation", "Review, rotate if real, and move this value into a managed secret store.")),
@@ -55,7 +93,7 @@ def scan_custom_rules(path: Path, text: str, rules: list[CustomRule]) -> list[Si
         return signals
     for number, line in enumerate(text.splitlines(), 1):
         for rule in rules:
-            for match in re.finditer(rule.pattern, line):
+            for match in rule.compiled.finditer(line):
                 value = match.group(0)
                 if not looks_like_secret(value):
                     continue

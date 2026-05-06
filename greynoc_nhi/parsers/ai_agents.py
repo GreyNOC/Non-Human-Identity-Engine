@@ -73,6 +73,13 @@ MODEL_GATEWAY_NAMES = {"litellm_config.yaml", "litellm_config.yml", "litellm_con
 MODEL_GATEWAY_MARKERS = {"litellm", "openai-compatible", "openai_compatible", "model_gateway", "ollama", "vllm", "text-generation-inference"}
 SENSITIVE_DATA_MARKERS = {"secret", ".env", "customer", "pii", "payment", "prod", "production", "private", "credential", "database"}
 
+# Compile once; previously rebuilt per line of every scanned file.
+_AGENT_LINE_RE = re.compile(
+    r"([A-Za-z0-9_.-]*(?:tool|memory|context|approval|scope|permission|connector)[A-Za-z0-9_.-]*)\s*[:=]\s*(.+)",
+    re.I,
+)
+_TOOL_BOUNDARY_RES = {tool: re.compile(rf"(?<![a-z0-9_-]){re.escape(tool)}(?![a-z0-9_-])") for tool in TOOL_CAPABILITIES}
+
 
 def should_parse(path: Path) -> bool:
     normalized = str(path).replace("\\", "/").lower()
@@ -97,7 +104,7 @@ def _rows(path: Path, text: str) -> list[tuple[str, object, int | None]]:
         return [(key, value, line) for key, value, line in simple_yaml_pairs(text)]
     rows: list[tuple[str, object, int | None]] = []
     for number, line in enumerate(text.splitlines(), 1):
-        match = re.search(r"([A-Za-z0-9_.-]*(?:tool|memory|context|approval|scope|permission|connector)[A-Za-z0-9_.-]*)\s*[:=]\s*(.+)", line, re.I)
+        match = _AGENT_LINE_RE.search(line)
         if match:
             rows.append((match.group(1), match.group(2).strip().strip("'\""), number))
     return rows
@@ -106,8 +113,8 @@ def _rows(path: Path, text: str) -> list[tuple[str, object, int | None]]:
 def _capabilities_from_text(text: object) -> set[str]:
     lowered = str(text).lower()
     tools = set()
-    for tool in TOOL_CAPABILITIES:
-        if re.search(rf"(?<![a-z0-9_-]){re.escape(tool)}(?![a-z0-9_-])", lowered):
+    for tool, compiled in _TOOL_BOUNDARY_RES.items():
+        if compiled.search(lowered):
             tools.add(CANONICAL_TOOL.get(tool, tool))
     if "gdrive" in lowered or "google drive" in lowered:
         tools.add("gdrive")

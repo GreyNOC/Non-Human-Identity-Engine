@@ -25,6 +25,17 @@ PATTERNS: list[tuple[str, str, str, str, str, str]] = [
     ("nhi_payment_key_detected", "STRIPE_RESTRICTED_KEY", r"\brk_live_[A-Za-z0-9]{16,}\b", "API key", "stripe", "payment"),
 ]
 
+# Compile patterns once at module load. Previously these were recompiled
+# (via the re-cache) on every line of every scanned file -- 16 patterns
+# x N lines x M files of cache lookups dominated scan time on real repos.
+_COMPILED_PATTERNS: list[tuple[str, str, re.Pattern[str], str, str, str]] = [
+    (rule_id, name, re.compile(pattern, re.I), identity_type, provider, source_name)
+    for rule_id, name, pattern, identity_type, provider, source_name in PATTERNS
+]
+_BEARER_RE = re.compile(r"\bAuthorization\s*[:=]\s*['\"]?Bearer\s+([A-Za-z0-9_\-.=]{16,})", re.I)
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b")
+_REGISTRY_AUTH_RE = re.compile(r"(?i)(?:_authToken|auth)\s*[:=]\s*['\"]?([A-Za-z0-9_\-/+=]{16,})")
+
 
 def should_parse(path: Path) -> bool:
     return path.name.startswith(".env") or path.suffix.lower() in TEXT_EXTENSIONS or path.name.lower() in {".npmrc", ".yarnrc", "config.json"}
@@ -34,8 +45,8 @@ def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []
     lines = text.splitlines()
     for number, line in enumerate(lines, 1):
-        for rule_id, name, pattern, identity_type, provider, source_name in PATTERNS:
-            for match in re.finditer(pattern, line, re.I):
+        for rule_id, name, compiled, identity_type, provider, source_name in _COMPILED_PATTERNS:
+            for match in compiled.finditer(line):
                 value = next((group for group in match.groups() if group), match.group(0))
                 if value and looks_like_secret(value):
                     signals.append(
@@ -54,7 +65,7 @@ def parse(path: Path, text: str) -> list[Signal]:
                             tags=["plaintext_secret", "modern_saas"],
                         )
                     )
-        bearer = re.search(r"\bAuthorization\s*[:=]\s*['\"]?Bearer\s+([A-Za-z0-9_\-.=]{16,})", line, re.I)
+        bearer = _BEARER_RE.search(line)
         if bearer and looks_like_secret(bearer.group(1)):
             signals.append(
                 make_signal(
@@ -70,7 +81,7 @@ def parse(path: Path, text: str) -> list[Signal]:
                     tags=["plaintext_secret", "http_auth"],
                 )
             )
-        jwt = re.search(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b", line)
+        jwt = _JWT_RE.search(line)
         if jwt:
             signals.append(
                 make_signal(
@@ -86,7 +97,7 @@ def parse(path: Path, text: str) -> list[Signal]:
                     tags=["plaintext_secret", "jwt"],
                 )
             )
-        registry = re.search(r"(?i)(?:_authToken|auth)\s*[:=]\s*['\"]?([A-Za-z0-9_\-/+=]{16,})", line)
+        registry = _REGISTRY_AUTH_RE.search(line)
         if registry and looks_like_secret(registry.group(1)):
             signals.append(
                 make_signal(

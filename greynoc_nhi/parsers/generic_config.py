@@ -40,6 +40,12 @@ AI_PROVIDER_KEY_NAMES = {
     "openrouter_api_key": "openrouter",
 }
 
+# Compile once at module load instead of per-line per-file.
+_LINE_KV_RE = re.compile(
+    r"([A-Za-z0-9_.-]*(?:api_key|apikey|secret|token|password|private_key|client_secret|access_key|refresh_token|signing_key|webhook_secret)[A-Za-z0-9_.-]*)\s*[:=]\s*['\"]([^'\"]+)['\"]",
+    re.I,
+)
+
 
 def should_parse(path: Path) -> bool:
     return path.suffix.lower() in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".py", ".js", ".ts"}
@@ -71,7 +77,7 @@ def parse(path: Path, text: str) -> list[Signal]:
         rows.extend((key, value, line) for key, value, line in simple_yaml_pairs(text))
     else:
         for number, line in enumerate(text.splitlines(), 1):
-            match = re.search(r"([A-Za-z0-9_.-]*(?:api_key|apikey|secret|token|password|private_key|client_secret|access_key|refresh_token|signing_key|webhook_secret)[A-Za-z0-9_.-]*)\s*[:=]\s*['\"]([^'\"]+)['\"]", line, re.I)
+            match = _LINE_KV_RE.search(line)
             if match:
                 rows.append((match.group(1), match.group(2), number))
     for key, value, line in rows:
