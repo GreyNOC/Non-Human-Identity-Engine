@@ -250,12 +250,28 @@ class Engine:
         history_max_commits: int | None = 1000,
         history_since: str | None = None,
         history_only: bool = False,
+        diff_mode: bool = False,
+        diff_base: str = "origin/main",
+        diff_staged: bool = False,
     ) -> ScanResult:
         started = utc_now()
         correlation_id = str(uuid4())
         fatal_errors: list[str] = []
         if history_only and not scan_history:
             scan_history = True
+        diff_stats: dict[str, Any] = {"enabled": False, "files": 0, "base": None, "staged": False}
+        only_paths: list[Path] | None = None
+        if diff_mode or diff_staged:
+            from greynoc_nhi.git_diff import list_diff_files
+            diff_stats["enabled"] = True
+            diff_stats["staged"] = bool(diff_staged)
+            diff_stats["base"] = None if diff_staged else diff_base
+            try:
+                only_paths = list_diff_files(project_path, base=diff_base, staged=diff_staged)
+                diff_stats["files"] = len(only_paths)
+            except Exception as exc:
+                fatal_errors.append(f"diff resolution failure: {redact_inline_secret(str(exc))}")
+                only_paths = []
         if history_only:
             raw = {
                 "project_path": str(Path(project_path).resolve()),
@@ -268,7 +284,7 @@ class Engine:
             }
         else:
             try:
-                raw = self.scanner.scan(project_path)
+                raw = self.scanner.scan(project_path, only_paths=only_paths)
             except Exception as exc:
                 raw = {
                     "project_path": str(Path(project_path).resolve()),
@@ -375,6 +391,7 @@ class Engine:
                 "fatal_errors": fatal_errors,
                 "correlation_id": correlation_id,
                 "history": history_stats,
+                "diff": diff_stats,
             },
             scan_trust_level=scan_trust_level,
             policy_decision=policy_decision,

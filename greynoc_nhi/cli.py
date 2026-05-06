@@ -35,6 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--history-only", action="store_true", help="Skip the working tree and scan only git history")
     parser.add_argument("--history-max-commits", type=int, default=1000, help="Cap history scan to the most recent N commits (default 1000, 0 for unlimited)")
     parser.add_argument("--history-since", help="Only include commits newer than this (e.g. '2024-01-01' or '6 months ago')")
+    parser.add_argument("--diff", action="store_true", help="Scan only files changed in <base>...HEAD (default base origin/main)")
+    parser.add_argument("--diff-staged", action="store_true", help="Scan only files staged for commit (use in pre-commit hooks)")
+    parser.add_argument("--base", default="origin/main", help="Base ref for --diff (default origin/main)")
     return parser
 
 
@@ -68,6 +71,9 @@ def _scan_kwargs(args) -> dict[str, object]:
         "history_only": bool(args.history_only),
         "history_max_commits": max_commits,
         "history_since": args.history_since,
+        "diff_mode": bool(args.diff),
+        "diff_base": args.base,
+        "diff_staged": bool(args.diff_staged),
     }
 
 

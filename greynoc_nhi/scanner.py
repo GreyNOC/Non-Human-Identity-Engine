@@ -106,7 +106,12 @@ class Scanner:
         self.ignored_dirs = ignored_dirs or IGNORED_DIRS
         self.custom_rules: list[CustomRule] = load_rule_pack(rule_pack_path)
 
-    def scan(self, project_path: str | Path) -> dict[str, Any]:
+    def scan(
+        self,
+        project_path: str | Path,
+        *,
+        only_paths: list[Path] | None = None,
+    ) -> dict[str, Any]:
         root = Path(project_path).resolve()
         signals: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
@@ -114,7 +119,11 @@ class Scanner:
         skipped_files = 0
         parser_cache: dict[tuple[str, str, str], list[Any]] = {}
         ignore_patterns = load_greynocignore(root)
-        for path in iter_scan_files(root, self.ignored_dirs, ignore_patterns):
+        candidates = iter_scan_files(root, self.ignored_dirs, ignore_patterns)
+        if only_paths is not None:
+            allowed = {p.resolve() for p in only_paths}
+            candidates = [p for p in candidates if p.resolve() in allowed]
+        for path in candidates:
             text = read_text_safely(path)
             if text is None:
                 skipped_files += 1
