@@ -50,6 +50,9 @@ SCAN_FILE_NAMES = {
     "docker-compose.yaml",
     "azure-pipelines.yml",
     ".gitlab-ci.yml",
+    "cdk.json",
+    "cdk.context.json",
+    "pulumi.yaml",
 }
 
 SCAN_EXTENSIONS = {
@@ -73,6 +76,7 @@ SCAN_EXTENSIONS = {
     ".java",
     ".cs",
     ".tf",
+    ".bicep",
 }
 
 MAX_FILE_BYTES = 2 * 1024 * 1024

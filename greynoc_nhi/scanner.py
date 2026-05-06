@@ -24,12 +24,17 @@ from greynoc_nhi.utils import read_text_safely
 def should_scan_file(path: Path) -> bool:
     """Return True when a file is small and relevant enough to scan."""
     name = path.name.lower()
+    pulumi_stack = (
+        name.startswith("pulumi.")
+        and (name.endswith(".yaml") or name.endswith(".yml"))
+    )
     if (
         name in SCAN_FILE_NAMES
         or path.suffix.lower() in SCAN_EXTENSIONS
         or name.startswith(".env")
         or name.endswith(".tfstate")
         or name.endswith(".tfstate.backup")
+        or pulumi_stack
     ):
         try:
             return path.stat().st_size <= MAX_FILE_BYTES
