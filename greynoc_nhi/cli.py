@@ -46,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clear-cache", action="store_true", help="Drop all cached parser results before scanning")
     parser.add_argument("--no-owner-enrich", action="store_true", help="Skip git blame + CODEOWNERS owner lookup (faster on large diffs)")
     parser.add_argument("--trend", action="store_true", help="Print new/resolved/unchanged finding counts vs the prior scan of this project")
+    parser.add_argument(
+        "--severity-exit-codes",
+        action="store_true",
+        help="Use tiered exit codes (0=clean, 1=low/medium, 2=high/critical, 10=untrusted) instead of the binary --fail-on-new code",
+    )
     return parser
 
 
@@ -103,7 +108,32 @@ def scan_with_json_report(engine: Engine, project_path: str | Path, args) -> tup
     return scan_result, report_path
 
 
+EXIT_CLEAN = 0
+EXIT_LOW_MEDIUM = 1
+EXIT_HIGH_CRITICAL = 2
+EXIT_CONFIG_ERROR = 3
+EXIT_UNTRUSTED = 10
+
+
+def severity_exit_code(scan_result) -> int:
+    """Tiered exit code following the ESLint/Gitleaks convention."""
+    if scan_result.scan_trust_level == "untrusted":
+        return EXIT_UNTRUSTED
+    new_severities = {
+        finding.severity
+        for finding in scan_result.findings
+        if finding.baseline_status != "known"
+    }
+    if {"critical", "high"} & new_severities:
+        return EXIT_HIGH_CRITICAL
+    if {"medium", "low"} & new_severities:
+        return EXIT_LOW_MEDIUM
+    return EXIT_CLEAN
+
+
 def exit_code_for_baseline(scan_result, args) -> int:
+    if getattr(args, "severity_exit_codes", False):
+        return severity_exit_code(scan_result)
     return 1 if has_new_findings_at_or_above(scan_result, args.fail_on_new) else 0
 
 
