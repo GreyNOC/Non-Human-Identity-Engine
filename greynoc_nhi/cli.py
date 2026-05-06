@@ -45,10 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-cache", action="store_true", help="Disable the per-file parser output cache")
     parser.add_argument("--clear-cache", action="store_true", help="Drop all cached parser results before scanning")
     parser.add_argument("--no-owner-enrich", action="store_true", help="Skip git blame + CODEOWNERS owner lookup (faster on large diffs)")
+    parser.add_argument("--trend", action="store_true", help="Print new/resolved/unchanged finding counts vs the prior scan of this project")
     return parser
 
 
-def print_summary(result, reports: dict[str, Path] | None = None) -> None:
+def print_summary(result, reports: dict[str, Path] | None = None, trend=None) -> None:
     print("Scan completed")
     print(f"Overall score: {result.overall_score}")
     print(f"Severity label: {severity_label(result.overall_score)}")
@@ -57,6 +58,8 @@ def print_summary(result, reports: dict[str, Path] | None = None) -> None:
     print(f"Identities found: {len(result.identities)}")
     print(f"Findings count: {len(result.findings)}")
     print(f"Advanced correlations: {result.stats.get('advanced_correlations', 0)}")
+    if trend is not None:
+        print(trend.summary())
     if reports:
         for report_type, path in reports.items():
             print(f"{report_type.upper()} report: {path}")
@@ -102,6 +105,15 @@ def scan_with_json_report(engine: Engine, project_path: str | Path, args) -> tup
 
 def exit_code_for_baseline(scan_result, args) -> int:
     return 1 if has_new_findings_at_or_above(scan_result, args.fail_on_new) else 0
+
+
+def _maybe_trend(engine: Engine, result, args):
+    if not getattr(args, "trend", False):
+        return None
+    if engine.storage is None:
+        return None
+    from greynoc_nhi.trend import compute_trend
+    return compute_trend(engine.storage, result)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -155,21 +167,27 @@ def main(argv: list[str] | None = None) -> int:
             "Scanning sample project",
             lambda: scan_with_reports(engine, sample_project_path(), args),
         )
-        print_summary(result, reports)
+        trend = _maybe_trend(engine, result, args)
+        print_summary(result, reports, trend=trend)
         return exit_code_for_baseline(result, args)
     if args.scan:
         result, reports = with_cli_indicator(
             "Scanning project",
             lambda: scan_with_reports(engine, args.scan, args),
         )
-        print_summary(result, reports)
+        trend = _maybe_trend(engine, result, args)
+        print_summary(result, reports, trend=trend)
         return exit_code_for_baseline(result, args)
     if args.json_path:
         result, report_path = with_cli_indicator(
             "Scanning project",
             lambda: scan_with_json_report(engine, args.json_path, args),
         )
-        print(json.dumps({"scan": result.to_dict(), "json_report": str(report_path)}, indent=2))
+        trend = _maybe_trend(engine, result, args)
+        payload = {"scan": result.to_dict(), "json_report": str(report_path)}
+        if trend is not None:
+            payload["trend"] = trend.to_dict()
+        print(json.dumps(payload, indent=2))
         return exit_code_for_baseline(result, args)
     build_parser().print_help()
     return 1
