@@ -51,6 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use tiered exit codes (0=clean, 1=low/medium, 2=high/critical, 10=untrusted) instead of the binary --fail-on-new code",
     )
+    parser.add_argument("--fix-gitignore", metavar="REPO", nargs="?", const=".", help="Add .env-style ignores to REPO's .gitignore")
+    parser.add_argument("--fix-pin-actions", metavar="REPO", nargs="?", const=".", help="Pin unpinned third-party GitHub actions to their current SHA via git ls-remote")
+    parser.add_argument("--suggest-fix", action="store_true", help="Print fix preview without writing changes")
     return parser
 
 
@@ -188,6 +191,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Hook removal failed: {exc}")
             return 2
         print("Hook removed." if removed else "No GreyNOC NHI hook installed; nothing to remove.")
+        return 0
+    if args.fix_gitignore is not None or args.fix_pin_actions is not None:
+        from greynoc_nhi.autofix import fix_gitignore, fix_pin_actions
+        results = []
+        dry_run = bool(args.suggest_fix)
+        if args.fix_gitignore is not None:
+            results.append(fix_gitignore(args.fix_gitignore, dry_run=dry_run))
+        if args.fix_pin_actions is not None:
+            results.append(fix_pin_actions(args.fix_pin_actions, dry_run=dry_run))
+        for outcome in results:
+            print(outcome.summary())
+            for note in outcome.notes:
+                print(f"  - {note}")
         return 0
     engine = Engine(args.db, rule_pack_path=args.rules, cache_enabled=not args.no_cache)
     if args.clear_cache and engine.cache is not None:
