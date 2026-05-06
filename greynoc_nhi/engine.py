@@ -8,14 +8,17 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import subprocess
+
 from greynoc_nhi.advanced import synthesize_advanced_signals
 from greynoc_nhi.baseline import apply_baseline
-from greynoc_nhi.cache import ParserCache
+from greynoc_nhi.cache import ParserCache, parser_version_string
 from greynoc_nhi.confidence import normalize_confidence
 from greynoc_nhi.custom_rules import custom_rule_templates
 from greynoc_nhi.masking import fingerprint_secret, mask_secret, redact_inline_secret
 from greynoc_nhi.models import Finding, NonHumanIdentity, ScanResult
 from greynoc_nhi.ownership import enrich_identity_owners
+from greynoc_nhi.parsers import PARSERS
 from greynoc_nhi.rules import run_rules
 from greynoc_nhi.scanner import Scanner
 from greynoc_nhi.scoring import calculate_overall_score, severity_label
@@ -167,6 +170,71 @@ def canonical_identity_type(value: object | None) -> str:
         return IDENTITY_TYPE_ALIASES[lowered]
     slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_")
     return IDENTITY_TYPE_ALIASES.get(slug, slug or "non_human_identity")
+
+
+def _git_head_sha(project_path: str | Path) -> str | None:
+    """Return the current HEAD commit SHA, or None when unavailable."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_path), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    sha = result.stdout.strip()
+    return sha or None
+
+
+def _git_dirty_signature(project_path: str | Path) -> str:
+    """Return a short signature of uncommitted content (empty when clean)."""
+    try:
+        diff_result = subprocess.run(
+            ["git", "-C", str(project_path), "diff", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        untracked = subprocess.run(
+            ["git", "-C", str(project_path), "ls-files", "--others", "--exclude-standard"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return ""
+    if diff_result.returncode != 0:
+        return ""
+    blob = (diff_result.stdout or "") + "\n--untracked--\n" + (untracked.stdout or "")
+    if not blob.strip("\n -untracked-"):
+        return ""
+    import hashlib
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
+
+
+def compute_scan_id(
+    project_path: str,
+    started: str,
+    identities_count: int,
+    findings_count: int,
+) -> str:
+    """Stable scan_id derived from git state when available, else the timestamp.
+
+    When the repository is committed clean, two runs over the same HEAD with
+    the same parsers produce the same scan_id - useful for deduplicating
+    uploaded SARIF reports and as an audit-trail identifier.
+    """
+    parser_version = parser_version_string(PARSERS)
+    git_sha = _git_head_sha(project_path)
+    if git_sha:
+        dirty = _git_dirty_signature(project_path)
+        if not dirty:
+            return stable_id("scan", project_path, git_sha, parser_version)
+        return stable_id("scan", project_path, git_sha, parser_version, "dirty", dirty)
+    return stable_id("scan", project_path, started, identities_count, findings_count)
 
 
 def normalize_signal(signal: dict) -> NonHumanIdentity:
@@ -383,7 +451,7 @@ class Engine:
         else:
             summary = "No high-confidence NHI risks were found in the scanned files."
         result = ScanResult(
-            scan_id=stable_id("scan", raw["project_path"], started, len(identities), len(findings)),
+            scan_id=compute_scan_id(raw["project_path"], started, len(identities), len(findings)),
             project_path=raw["project_path"],
             started_at=started,
             completed_at=completed,
