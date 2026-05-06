@@ -15,6 +15,7 @@ from greynoc_nhi.confidence import normalize_confidence
 from greynoc_nhi.custom_rules import custom_rule_templates
 from greynoc_nhi.masking import fingerprint_secret, mask_secret, redact_inline_secret
 from greynoc_nhi.models import Finding, NonHumanIdentity, ScanResult
+from greynoc_nhi.ownership import enrich_identity_owners
 from greynoc_nhi.rules import run_rules
 from greynoc_nhi.scanner import Scanner
 from greynoc_nhi.scoring import calculate_overall_score, severity_label
@@ -261,6 +262,7 @@ class Engine:
         diff_mode: bool = False,
         diff_base: str = "origin/main",
         diff_staged: bool = False,
+        enrich_owners: bool = True,
     ) -> ScanResult:
         started = utc_now()
         correlation_id = str(uuid4())
@@ -338,6 +340,13 @@ class Engine:
             except Exception as exc:
                 fatal_errors.append(f"advanced correlation failure: {redact_inline_secret(str(exc))}")
 
+        owners_enriched = 0
+        if enrich_owners and not fatal_errors and not history_only:
+            try:
+                owners_enriched = enrich_identity_owners(identities, project_path)
+            except Exception as exc:
+                fatal_errors.append(f"ownership enrichment failure: {redact_inline_secret(str(exc))}")
+
         findings: list[Finding] = []
         if not fatal_errors:
             try:
@@ -402,6 +411,7 @@ class Engine:
                 "diff": diff_stats,
                 "cache_hits": raw.get("cache_hits", 0),
                 "cache_misses": raw.get("cache_misses", 0),
+                "owners_enriched": owners_enriched,
             },
             scan_trust_level=scan_trust_level,
             policy_decision=policy_decision,

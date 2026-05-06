@@ -44,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--install-hook-force", action="store_true", help="Reinstall the hook even if already present")
     parser.add_argument("--no-cache", action="store_true", help="Disable the per-file parser output cache")
     parser.add_argument("--clear-cache", action="store_true", help="Drop all cached parser results before scanning")
+    parser.add_argument("--no-owner-enrich", action="store_true", help="Skip git blame + CODEOWNERS owner lookup (faster on large diffs)")
     return parser
 
 
@@ -80,6 +81,7 @@ def _scan_kwargs(args) -> dict[str, object]:
         "diff_mode": bool(args.diff),
         "diff_base": args.base,
         "diff_staged": bool(args.diff_staged),
+        "enrich_owners": not bool(args.no_owner_enrich),
     }
 
 
