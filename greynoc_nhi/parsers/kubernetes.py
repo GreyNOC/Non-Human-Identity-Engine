@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 from pathlib import Path
 
 from greynoc_nhi.parsers.base import Signal, make_signal
 
-
 def should_parse(path: Path) -> bool:
     return path.suffix.lower() in {".yaml", ".yml"} and any(token in path.name.lower() for token in ["k8s", "kube", "deployment", "service"])
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []

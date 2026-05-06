@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
@@ -56,10 +58,8 @@ AI_PROVIDER_KEYS = {
     "OPENROUTER_API_KEY",
 }
 
-
 def should_parse(path: Path) -> bool:
     return path.name.startswith(".env") or path.suffix.lower() in {".env"}
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []

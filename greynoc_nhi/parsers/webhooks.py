@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
@@ -10,10 +12,8 @@ from greynoc_nhi.utils import line_number_at_offset
 
 WEBHOOK_RE = re.compile(r"https://(?:hooks\.slack\.com/services|discord(?:app)?\.com/api/webhooks|hooks\.zapier\.com|hook\.make\.com|api\.stripe\.com|[^\s\"']*webhook[^\s\"']*)/[^\s\"']+", re.I)
 
-
 def should_parse(path: Path) -> bool:
     return path.suffix.lower() in {".json", ".yaml", ".yml", ".env", ".txt", ".py", ".js", ".ts", ".toml", ".ini", ".cfg", ".conf"}
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []

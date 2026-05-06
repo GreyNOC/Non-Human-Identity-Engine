@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 from pathlib import Path
 
 from greynoc_nhi.parsers.base import Signal, make_signal
@@ -9,10 +11,8 @@ from greynoc_nhi.utils import parse_json_safely
 
 RISKY_PERMISSIONS = {"tabs", "cookies", "webRequest", "webRequestBlocking", "debugger", "nativeMessaging", "scripting", "downloads", "history", "proxy", "<all_urls>"}
 
-
 def should_parse(path: Path) -> bool:
     return path.name.lower() in {"manifest.json", "browser_extension_manifest.json"}
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     data = parse_json_safely(text)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
@@ -9,11 +11,9 @@ from greynoc_nhi.parsers.base import Signal, make_signal
 
 CI_FILE_NAMES = {".gitlab-ci.yml", ".gitlab-ci.yaml", "azure-pipelines.yml", "azure-pipelines.yaml", "bitbucket-pipelines.yml", "circleci.yml", "ci_pipeline.yml", "pipeline.yml"}
 
-
 def should_parse(path: Path) -> bool:
     normalized = str(path).replace("\\", "/").lower()
     return ("/.github/workflows/" in normalized or path.name.lower() in CI_FILE_NAMES or ".circleci/" in normalized) and path.suffix.lower() in {".yml", ".yaml"}
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []

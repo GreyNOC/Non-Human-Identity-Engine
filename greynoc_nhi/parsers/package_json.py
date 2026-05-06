@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 from pathlib import Path
 
 from greynoc_nhi.parsers.base import Signal, make_signal
 from greynoc_nhi.utils import parse_json_safely
 
-
 def should_parse(path: Path) -> bool:
     return path.name.lower() == "package.json"
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     data = parse_json_safely(text)
