@@ -219,6 +219,10 @@ def normalize_signal(signal: dict) -> NonHumanIdentity:
         tags=tags,
         related_identities=normalize_string_list(signal.get("related_identities")),
         confidence=normalize_confidence(signal.get("confidence")),
+        commit_sha=_safe_text(signal.get("commit_sha")),
+        commit_short_sha=_safe_text(signal.get("commit_short_sha")),
+        commit_author=_safe_text(signal.get("commit_author")),
+        commit_date=_safe_text(signal.get("commit_date")),
     )
 
 
@@ -241,13 +245,18 @@ class Engine:
         persist: bool = True,
         baseline_path: str | Path | None = None,
         allow_untrusted_persist: bool | None = None,
+        *,
+        scan_history: bool = False,
+        history_max_commits: int | None = 1000,
+        history_since: str | None = None,
+        history_only: bool = False,
     ) -> ScanResult:
         started = utc_now()
         correlation_id = str(uuid4())
         fatal_errors: list[str] = []
-        try:
-            raw = self.scanner.scan(project_path)
-        except Exception as exc:
+        if history_only and not scan_history:
+            scan_history = True
+        if history_only:
             raw = {
                 "project_path": str(Path(project_path).resolve()),
                 "signals": [],
@@ -257,7 +266,36 @@ class Engine:
                 "ignore_patterns": [],
                 "custom_rules": [],
             }
-            fatal_errors.append(f"scanner failure: {redact_inline_secret(str(exc))}")
+        else:
+            try:
+                raw = self.scanner.scan(project_path)
+            except Exception as exc:
+                raw = {
+                    "project_path": str(Path(project_path).resolve()),
+                    "signals": [],
+                    "errors": [],
+                    "scanned_files": 0,
+                    "skipped_files": 0,
+                    "ignore_patterns": [],
+                    "custom_rules": [],
+                }
+                fatal_errors.append(f"scanner failure: {redact_inline_secret(str(exc))}")
+        history_stats: dict[str, Any] = {"enabled": False, "commits_scanned": 0, "history_signals": 0}
+        if scan_history:
+            history_stats["enabled"] = True
+            try:
+                history_raw = self.scanner.scan_history(
+                    project_path,
+                    max_commits=history_max_commits,
+                    since=history_since,
+                )
+            except Exception as exc:
+                fatal_errors.append(f"history scan failure: {redact_inline_secret(str(exc))}")
+                history_raw = {"signals": [], "errors": [], "commits_scanned": 0}
+            history_stats["commits_scanned"] = history_raw.get("commits_scanned", 0)
+            history_stats["history_signals"] = len(history_raw.get("signals", []))
+            raw["signals"] = list(raw.get("signals", [])) + list(history_raw.get("signals", []))
+            raw["errors"] = list(raw.get("errors", [])) + list(history_raw.get("errors", []))
 
         identities: list[NonHumanIdentity] = []
         normalization_errors: list[dict[str, str]] = []
@@ -336,6 +374,7 @@ class Engine:
                 "policy_decision": policy_decision,
                 "fatal_errors": fatal_errors,
                 "correlation_id": correlation_id,
+                "history": history_stats,
             },
             scan_trust_level=scan_trust_level,
             policy_decision=policy_decision,

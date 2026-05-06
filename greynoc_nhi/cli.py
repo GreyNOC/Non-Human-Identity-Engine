@@ -31,6 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--write-baseline", help="Write a baseline JSON file from the current scan")
     parser.add_argument("--fail-on-new", choices=["low", "medium", "high", "critical"], help="Return nonzero if a new finding at or above this severity exists")
     parser.add_argument("--rules", help="Custom JSON rule pack path")
+    parser.add_argument("--scan-history", action="store_true", help="Also scan git history for secrets that were committed and later removed")
+    parser.add_argument("--history-only", action="store_true", help="Skip the working tree and scan only git history")
+    parser.add_argument("--history-max-commits", type=int, default=1000, help="Cap history scan to the most recent N commits (default 1000, 0 for unlimited)")
+    parser.add_argument("--history-since", help="Only include commits newer than this (e.g. '2024-01-01' or '6 months ago')")
     return parser
 
 
@@ -57,13 +61,23 @@ def _post_process(scan_result, args) -> tuple[object, dict[str, Path]]:
     return scan_result, reports
 
 
+def _scan_kwargs(args) -> dict[str, object]:
+    max_commits = args.history_max_commits if args.history_max_commits and args.history_max_commits > 0 else None
+    return {
+        "scan_history": bool(args.scan_history or args.history_only),
+        "history_only": bool(args.history_only),
+        "history_max_commits": max_commits,
+        "history_since": args.history_since,
+    }
+
+
 def scan_with_reports(engine: Engine, project_path: str | Path, args) -> tuple[object, dict[str, Path]]:
-    scan_result = engine.run_scan(project_path, baseline_path=args.baseline)
+    scan_result = engine.run_scan(project_path, baseline_path=args.baseline, **_scan_kwargs(args))
     return _post_process(scan_result, args)
 
 
 def scan_with_json_report(engine: Engine, project_path: str | Path, args) -> tuple[object, Path]:
-    scan_result = engine.run_scan(project_path, baseline_path=args.baseline)
+    scan_result = engine.run_scan(project_path, baseline_path=args.baseline, **_scan_kwargs(args))
     if args.write_baseline:
         write_baseline(scan_result, args.write_baseline)
     if args.sarif_out:

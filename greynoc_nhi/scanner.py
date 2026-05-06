@@ -7,6 +7,13 @@ from typing import Any
 
 from greynoc_nhi.constants import IGNORED_DIRS, MAX_FILE_BYTES, SCAN_EXTENSIONS, SCAN_FILE_NAMES
 from greynoc_nhi.custom_rules import CustomRule, load_rule_pack, scan_custom_rules
+from greynoc_nhi.git_history import (
+    commit_signal_fields,
+    history_evidence_line,
+    is_git_repository,
+    iter_history_changes,
+    remap_line_number,
+)
 from greynoc_nhi.ignore import is_ignored, load_greynocignore
 from greynoc_nhi.masking import redact_inline_secret
 from greynoc_nhi.parsers import PARSERS
@@ -125,3 +132,62 @@ class Scanner:
                     errors.append({"file": str(path), "parser": parser.__name__, "error": redact_inline_secret(str(exc))})
             signals.extend(scan_custom_rules(path, text, self.custom_rules))
         return {"project_path": str(root), "signals": dedupe_signals(signals), "errors": errors, "scanned_files": scanned_files, "skipped_files": skipped_files, "ignore_patterns": ignore_patterns, "custom_rules": self.custom_rules}
+
+    def scan_history(
+        self,
+        project_path: str | Path,
+        *,
+        max_commits: int | None = 1000,
+        since: str | None = None,
+    ) -> dict[str, Any]:
+        """Scan a repository's git history for secrets in past commits."""
+        root = Path(project_path).resolve()
+        signals: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        commits_seen: set[str] = set()
+        if not is_git_repository(root):
+            return {
+                "project_path": str(root),
+                "signals": [],
+                "errors": [{"file": str(root), "parser": "git_history", "error": "not a git repository"}],
+                "commits_scanned": 0,
+            }
+        try:
+            changes = list(iter_history_changes(root, max_commits=max_commits, since=since))
+        except Exception as exc:
+            return {
+                "project_path": str(root),
+                "signals": [],
+                "errors": [{"file": str(root), "parser": "git_history", "error": redact_inline_secret(str(exc))}],
+                "commits_scanned": 0,
+            }
+        for change in changes:
+            commits_seen.add(change.commit.sha)
+            synthetic_path = root / change.file_path
+            for parser in PARSERS:
+                try:
+                    if not parser.should_parse(synthetic_path):
+                        continue
+                    raw_signals = parser.parse(synthetic_path, change.synthetic_text)
+                except Exception as exc:
+                    errors.append({
+                        "file": change.file_path,
+                        "parser": parser.__name__,
+                        "error": redact_inline_secret(str(exc)),
+                        "commit": change.commit.short_sha,
+                    })
+                    continue
+                for sig in raw_signals:
+                    remapped = remap_line_number(change.line_map, sig.get("line_number"))
+                    if remapped is not None:
+                        sig["line_number"] = remapped
+                    sig.update(commit_signal_fields(change.commit))
+                    sig["tags"] = list(sig.get("tags", [])) + ["git_history"]
+                    sig["evidence"] = list(sig.get("evidence", [])) + [history_evidence_line(change.commit)]
+                    signals.append(sig)
+        return {
+            "project_path": str(root),
+            "signals": dedupe_signals(signals),
+            "errors": errors,
+            "commits_scanned": len(commits_seen),
+        }
