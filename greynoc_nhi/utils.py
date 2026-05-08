@@ -17,7 +17,7 @@ def stable_id(prefix: str, *parts: object) -> str:
     import hashlib
 
     raw = "|".join(str(part) for part in parts)
-    return f"{prefix}_{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]}"
+    return f"{prefix}_{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
 
 
 def read_text_safely(path: Path) -> str | None:
