@@ -73,11 +73,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@db2c8fe24a75c0f28f87ed1a6fe918a5ccf7b1e6 # v4.31.10
+        uses: github/codeql-action/init@cdefb33c0f6224e58673d9004f47f7cb3e328b89 # v4.31.10
         with:
           languages: python
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@db2c8fe24a75c0f28f87ed1a6fe918a5ccf7b1e6 # v4.31.10
+        uses: github/codeql-action/analyze@cdefb33c0f6224e58673d9004f47f7cb3e328b89 # v4.31.10
 
   greynoc-self-scan:
     name: GreyNOC self scan
@@ -102,6 +102,6 @@ jobs:
       - name: Run GreyNOC self scan
         run: python -m greynoc_nhi --scan . --no-cache --no-owner-enrich --out security-reports --sarif-out greynoc-nhi.sarif
       - name: Upload GreyNOC SARIF
-        uses: github/codeql-action/upload-sarif@db2c8fe24a75c0f28f87ed1a6fe918a5ccf7b1e6 # v4.31.10
+        uses: github/codeql-action/upload-sarif@cdefb33c0f6224e58673d9004f47f7cb3e328b89 # v4.31.10
         with:
           sarif_file: greynoc-nhi.sarif
