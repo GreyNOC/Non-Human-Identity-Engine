@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from greynoc_nhi.cache import ParserCache, content_hash, parser_version_string, rewrite_file_path
+from greynoc_nhi.cache import ParserCache, content_hash, parser_version_string, rewrite_file_path, sanitize_signals_for_disk
 from greynoc_nhi.constants import IGNORED_DIRS, MAX_FILE_BYTES, SCAN_EXTENSIONS, SCAN_FILE_NAMES
 from greynoc_nhi.custom_rules import CustomRule, load_rule_pack, scan_custom_rules
 from greynoc_nhi.git_history import (
@@ -184,8 +184,9 @@ class Scanner:
                         file_signals.extend(parser.parse(path, text))
                     except Exception as exc:  # Defensive parser isolation.
                         errors.append({"file": str(path), "parser": parser.__name__, "error": redact_inline_secret(str(exc))})
-                if self.cache is not None and content_sha is not None and parsers:
-                    self.cache.put(content_sha, self._parser_version, file_signals)
+                has_secret_signal = any(signal.get("secret_value") for signal in file_signals)
+                if self.cache is not None and content_sha is not None and parsers and not has_secret_signal:
+                    self.cache.put(content_sha, self._parser_version, sanitize_signals_for_disk(file_signals))
             signals.extend(file_signals)
             signals.extend(scan_custom_rules(path, text, self.custom_rules))
         return {

@@ -106,9 +106,12 @@ def test_ai_nhi_outputs_and_persistence_do_not_include_raw_secrets():
     assert loaded is not None
     persisted = json.dumps(loaded.to_dict())
     db_bytes = db_path.read_bytes()
+    cache_path = db_path.with_name(db_path.stem + "_cache.sqlite3")
+    cache_bytes = cache_path.read_bytes() if cache_path.exists() else b""
     for raw_secret in RAW_FIXTURE_SECRETS:
         assert raw_secret not in serialized
         assert raw_secret.encode() not in db_bytes
+        assert raw_secret.encode() not in cache_bytes
         assert raw_secret not in persisted
         for output in outputs:
             assert raw_secret not in output.read_text(encoding="utf-8")

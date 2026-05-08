@@ -214,7 +214,8 @@ class GreyNOCApp(tk.Tk):
             result = self.engine.run_scan(project)
             self.after(0, lambda: self._render_result(result))
         except Exception as exc:
-            self.after(0, lambda: self._scan_failed(str(exc)))
+            message = str(exc)
+            self.after(0, lambda: self._scan_failed(message))
 
     def _scan_failed(self, message: str) -> None:
         self.indicator.stop()

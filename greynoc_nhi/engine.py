@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
+import subprocess
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
-
-import subprocess
 
 from greynoc_nhi.advanced import derive_risk_paths, synthesize_advanced_signals
 from greynoc_nhi.baseline import apply_baseline
 from greynoc_nhi.cache import ParserCache, parser_version_string
 from greynoc_nhi.confidence import normalize_confidence
+from greynoc_nhi.constants import MAX_FILE_BYTES
 from greynoc_nhi.custom_rules import custom_rule_templates
 from greynoc_nhi.masking import fingerprint_secret, mask_secret, redact_inline_secret
 from greynoc_nhi.models import Finding, NonHumanIdentity, ScanResult
@@ -137,20 +138,20 @@ def _dedupe_redacted(values: list[object]) -> list[str]:
     return result
 
 
-def _safe_text(value: object | None, secret_value: object | None = None) -> str | None:
+def _safe_text(value: object | None, secret_value: object | None = None, fingerprint_key: bytes | str | None = None) -> str | None:
     if value is None:
         return None
     text = str(value)
     if secret_value:
-        text = text.replace(str(secret_value), mask_secret(str(secret_value)))
+        text = text.replace(str(secret_value), mask_secret(str(secret_value), fingerprint_key=fingerprint_key))
     return redact_inline_secret(text)
 
 
-def _safe_evidence(value: object, secret_value: object | None = None) -> list[str]:
+def _safe_evidence(value: object, secret_value: object | None = None, fingerprint_key: bytes | str | None = None) -> list[str]:
     if value is None:
         return []
     values = value if isinstance(value, list) else [value]
-    return [item for item in (_safe_text(item, secret_value) for item in values) if item]
+    return [item for item in (_safe_text(item, secret_value, fingerprint_key) for item in values) if item]
 
 
 def _line_number(value: object) -> int | None:
@@ -191,6 +192,7 @@ def _git_head_sha(project_path: str | Path) -> str | None:
 
 def _git_dirty_signature(project_path: str | Path) -> str:
     """Return a short signature of uncommitted content (empty when clean)."""
+    root = Path(project_path)
     try:
         diff_result = subprocess.run(
             ["git", "-C", str(project_path), "diff", "HEAD"],
@@ -208,11 +210,36 @@ def _git_dirty_signature(project_path: str | Path) -> str:
         return ""
     if diff_result.returncode != 0:
         return ""
-    blob = (diff_result.stdout or "") + "\n--untracked--\n" + (untracked.stdout or "")
-    if not blob.strip("\n -untracked-"):
+    untracked_content = _untracked_content_digest(root, untracked.stdout if untracked.returncode == 0 else "")
+    diff_text = diff_result.stdout or ""
+    untracked_text = untracked.stdout or ""
+    if not (diff_text.strip() or untracked_text.strip() or untracked_content.strip()):
         return ""
+    blob = diff_text + "\n--untracked--\n" + untracked_text + "\n--untracked-content--\n" + untracked_content
     import hashlib
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
+
+
+def _untracked_content_digest(root: Path, untracked_stdout: str) -> str:
+    """Return a digest input for untracked files without storing their content."""
+    import hashlib
+
+    chunks: list[str] = []
+    for rel in sorted(line.strip() for line in untracked_stdout.splitlines() if line.strip()):
+        path = root / rel
+        try:
+            if not path.is_file():
+                chunks.append(f"{rel}:not-file")
+                continue
+            size = path.stat().st_size
+            if size > MAX_FILE_BYTES:
+                chunks.append(f"{rel}:size={size}:too-large")
+                continue
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            chunks.append(f"{rel}:size={size}:sha256={digest}")
+        except OSError:
+            chunks.append(f"{rel}:unreadable")
+    return "\n".join(chunks)
 
 
 def compute_scan_id(
@@ -237,12 +264,12 @@ def compute_scan_id(
     return stable_id("scan", project_path, started, identities_count, findings_count)
 
 
-def normalize_signal(signal: dict) -> NonHumanIdentity:
+def normalize_signal(signal: dict, fingerprint_key: bytes | str | None = None) -> NonHumanIdentity:
     """Convert parser signal dictionaries into safe NHI model objects."""
     secret_value = signal.get("secret_value")
     tags = sorted(set(item for item in [signal.get("rule_id"), *normalize_string_list(signal.get("tags"))] if item))
-    secret_fingerprint = fingerprint_secret(secret_value) if secret_value else None
-    masked_secret = mask_secret(secret_value) if secret_value else None
+    secret_fingerprint = fingerprint_secret(secret_value, key=fingerprint_key) if secret_value else None
+    masked_secret = mask_secret(secret_value, fingerprint_key=fingerprint_key) if secret_value else None
     file_path = _safe_text(signal.get("file_path"))
     line_number = _line_number(signal.get("line_number"))
     permissions = normalize_string_list(signal.get("permissions"))
@@ -287,8 +314,8 @@ def normalize_signal(signal: dict) -> NonHumanIdentity:
         ai_risk_refs=normalize_string_list(signal.get("ai_risk_refs")),
         ai_attack_class=_safe_text(signal.get("ai_attack_class")),
         attack_chain_stage=_safe_text(signal.get("attack_chain_stage")),
-        evidence=_safe_evidence(signal.get("evidence", []), secret_value),
-        raw_reference=_safe_text(signal.get("raw_reference"), secret_value),
+        evidence=_safe_evidence(signal.get("evidence", []), secret_value, fingerprint_key),
+        raw_reference=_safe_text(signal.get("raw_reference"), secret_value, fingerprint_key),
         tags=tags,
         related_identities=normalize_string_list(signal.get("related_identities")),
         confidence=normalize_confidence(signal.get("confidence")),
@@ -337,6 +364,7 @@ class Engine:
     ) -> ScanResult:
         started = utc_now()
         correlation_id = str(uuid4())
+        fingerprint_key = secrets.token_bytes(32)
         fatal_errors: list[str] = []
         if history_only and not scan_history:
             scan_history = True
@@ -398,7 +426,7 @@ class Engine:
         normalization_errors: list[dict[str, str]] = []
         for signal in raw.get("signals", []):
             try:
-                identities.append(normalize_signal(signal))
+                identities.append(normalize_signal(signal, fingerprint_key=fingerprint_key))
             except Exception as exc:
                 normalization_errors.append({"signal": redact_inline_secret(str(signal.get("rule_id", "unknown"))), "error": redact_inline_secret(str(exc))})
 
@@ -407,7 +435,7 @@ class Engine:
             try:
                 advanced_signals = synthesize_advanced_signals(identities, raw)
                 for signal in advanced_signals:
-                    identities.append(normalize_signal(signal))
+                    identities.append(normalize_signal(signal, fingerprint_key=fingerprint_key))
             except Exception as exc:
                 fatal_errors.append(f"advanced correlation failure: {redact_inline_secret(str(exc))}")
 

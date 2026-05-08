@@ -7,7 +7,9 @@ strings for safe display and stable deduplication.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
+import secrets
 
 from greynoc_nhi.confidence import is_placeholder_value
 
@@ -22,19 +24,64 @@ PRIVATE_KEY_BLOCK_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 HIGH_ENTROPY_RE = re.compile(r"(?<![A-Za-z0-9_+=-])([A-Za-z0-9_+=-]{32,})(?![A-Za-z0-9_+=-])")
+_PROCESS_FINGERPRINT_KEY = secrets.token_bytes(32)
 
 
-def mask_secret(value: str) -> str:
+def _key_bytes(key: bytes | str | None) -> bytes:
+    if key is None:
+        return _PROCESS_FINGERPRINT_KEY
+    if isinstance(key, bytes):
+        return key
+    return str(key).encode("utf-8")
+
+
+def _secret_label(value: str) -> str:
+    lowered = value.lower()
+    if lowered.startswith("sk-ant"):
+        return "anthropic_api_key"
+    if lowered.startswith(("rk_live_", "sk_live_", "pk_live_")):
+        return "payment_key"
+    if lowered.startswith(("sk-", "sk_")) or "openai" in lowered:
+        return "openai_api_key"
+    if lowered.startswith(("ghp_", "gho_", "github_pat_")):
+        return "github_token"
+    if lowered.startswith(("xoxb-", "xoxp-", "xapp-")):
+        return "slack_token"
+    if lowered.startswith("whsec"):
+        return "webhook_secret"
+    if "-----begin" in lowered and "private key" in lowered:
+        return "private_key"
+    if lowered.startswith("eyj"):
+        return "jwt"
+    if lowered.startswith("hf_"):
+        return "huggingface_token"
+    if lowered.startswith("npm_"):
+        return "package_registry_token"
+    if lowered.startswith("pypi-"):
+        return "package_registry_token"
+    return "secret"
+
+
+def mask_secret(value: str, *, fingerprint_key: bytes | str | None = None) -> str:
     """Return a display-safe masked representation of a secret-like value."""
     value = str(value).strip()
-    if len(value) <= 8:
-        return "********"
-    return f"{value[:4]}...{value[-4:]}"
+    if value.startswith("[REDACTED:"):
+        return value
+    label = _secret_label(value)
+    fp = fingerprint_secret(value, key=fingerprint_key)[:8]
+    return f"[REDACTED:{label} len={len(value)} fp={fp}]"
 
 
-def fingerprint_secret(value: str) -> str:
-    """Return a stable SHA-256 fingerprint without storing the original value."""
-    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+def fingerprint_secret(value: str, *, key: bytes | str | None = None, stable: bool = False) -> str:
+    """Return a non-reversible fingerprint without storing the original value.
+
+    By default this uses an in-memory random HMAC key. Callers that need
+    explicit cross-process stability must opt into stable=True.
+    """
+    raw = str(value).encode("utf-8")
+    if stable:
+        return hashlib.sha256(raw).hexdigest()
+    return hmac.new(_key_bytes(key), raw, hashlib.sha256).hexdigest()
 
 
 def looks_like_secret(value: str) -> bool:

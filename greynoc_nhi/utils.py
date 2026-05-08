@@ -17,7 +17,7 @@ def stable_id(prefix: str, *parts: object) -> str:
     import hashlib
 
     raw = "|".join(str(part) for part in parts)
-    return f"{prefix}_{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]}"
+    return f"{prefix}_{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
 
 
 def read_text_safely(path: Path) -> str | None:
@@ -30,6 +30,22 @@ def read_text_safely(path: Path) -> str | None:
             return None
     except OSError:
         return None
+
+
+def chmod_private_file(path: Path) -> None:
+    """Best-effort owner-only permissions for local sensitive artifacts."""
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def chmod_private_dir(path: Path) -> None:
+    """Best-effort owner-only directory permissions for local scan artifacts."""
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
 
 
 def parse_json_safely(text: str) -> Any | None:

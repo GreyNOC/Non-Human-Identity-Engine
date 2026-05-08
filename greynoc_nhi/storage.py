@@ -11,6 +11,7 @@ from typing import Any
 
 from greynoc_nhi.constants import DEFAULT_DB_PATH
 from greynoc_nhi.models import Finding, NonHumanIdentity, RiskPath, ScanResult
+from greynoc_nhi.utils import chmod_private_dir, chmod_private_file
 
 
 def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
@@ -21,7 +22,9 @@ class Storage:
     def __init__(self, db_path: str | Path = DEFAULT_DB_PATH) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        chmod_private_dir(self.db_path.parent)
         self.init_db()
+        chmod_private_file(self.db_path)
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)
@@ -86,6 +89,7 @@ class Storage:
             if "readonly" not in str(exc).lower():
                 raise
             fallback_dir = Path(tempfile.mkdtemp(prefix=f"greynoc_nhi_db_{os.getpid()}_"))
+            chmod_private_dir(fallback_dir)
             self.db_path = fallback_dir / "greynoc_nhi.sqlite3"
             self.init_db()
             self._save_scan_once(scan_result)
@@ -124,6 +128,7 @@ class Storage:
                 "INSERT OR REPLACE INTO risk_paths VALUES (?, ?, ?)",
                 [(risk_path.id, scan_result.scan_id, json.dumps(risk_path.to_dict())) for risk_path in scan_result.risk_paths],
             )
+        chmod_private_file(self.db_path)
 
     def list_scans(self) -> list[dict[str, Any]]:
         with self.connect() as conn:

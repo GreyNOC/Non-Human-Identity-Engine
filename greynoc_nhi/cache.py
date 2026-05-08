@@ -18,6 +18,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from greynoc_nhi.masking import mask_secret, redact_inline_secret
+from greynoc_nhi.utils import chmod_private_dir, chmod_private_file
+
+SENSITIVE_SIGNAL_KEYS = {"secret_value"}
+SENSITIVE_TEXT_KEYS = {"evidence", "raw_reference", "context_store"}
+
 CACHE_SCHEMA = """
     CREATE TABLE IF NOT EXISTS parser_cache (
         cache_key TEXT PRIMARY KEY,
@@ -46,6 +52,36 @@ def _make_key(content_sha: str, parser_version: str) -> str:
     return hashlib.sha256(f"{content_sha}|{parser_version}".encode("utf-8")).hexdigest()
 
 
+def sanitize_signal_for_disk(signal: dict[str, Any]) -> dict[str, Any]:
+    """Return a cache-safe signal copy with raw secret fields removed."""
+    clean = dict(signal)
+    secret_value = clean.get("secret_value")
+    for key in SENSITIVE_TEXT_KEYS:
+        if key in clean:
+            clean[key] = _sanitize_signal_text(clean[key], secret_value)
+    for key in SENSITIVE_SIGNAL_KEYS:
+        clean.pop(key, None)
+    return clean
+
+
+def _sanitize_signal_text(value: Any, secret_value: Any | None) -> Any:
+    if isinstance(value, list):
+        return [_sanitize_signal_text(item, secret_value) for item in value]
+    if isinstance(value, dict):
+        return {key: _sanitize_signal_text(item, secret_value) for key, item in value.items()}
+    if value is None:
+        return None
+    text = str(value)
+    if secret_value:
+        text = text.replace(str(secret_value), mask_secret(str(secret_value)))
+    return redact_inline_secret(text)
+
+
+def sanitize_signals_for_disk(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return cache-safe copies of parser signals."""
+    return [sanitize_signal_for_disk(signal) for signal in signals]
+
+
 class ParserCache:
     """Thin SQLite cache for parser-produced signal lists."""
 
@@ -53,8 +89,10 @@ class ParserCache:
         self.db_path = Path(db_path) if db_path else None
         if self.db_path is not None:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            chmod_private_dir(self.db_path.parent)
             with self._connect() as conn:
                 conn.executescript(CACHE_SCHEMA)
+            chmod_private_file(self.db_path)
 
     def enabled(self) -> bool:
         return self.db_path is not None
@@ -81,21 +119,30 @@ class ParserCache:
         if row is None:
             return None
         try:
-            return json.loads(row[0])
+            parsed = json.loads(row[0])
         except (TypeError, ValueError):
             return None
+        if not isinstance(parsed, list):
+            return None
+        safe = sanitize_signals_for_disk(parsed)
+        if safe != parsed:
+            self.put(content_sha, parser_version, safe)
+        return safe
 
     def put(self, content_sha: str, parser_version: str, signals: list[dict[str, Any]]) -> None:
         if not self.enabled():
             return
         key = _make_key(content_sha, parser_version)
         cached_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        safe_signals = sanitize_signals_for_disk(signals)
         try:
             with self._connect() as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO parser_cache (cache_key, parser_version, signals_json, cached_at) VALUES (?, ?, ?, ?)",
-                    (key, parser_version, json.dumps(signals), cached_at),
+                    (key, parser_version, json.dumps(safe_signals), cached_at),
                 )
+            assert self.db_path is not None
+            chmod_private_file(self.db_path)
         except sqlite3.OperationalError:
             return
 
