@@ -10,7 +10,7 @@ from pathlib import Path
 from greynoc_nhi.masking import looks_like_secret
 from greynoc_nhi.parsers.base import Signal, make_signal
 
-TEXT_EXTENSIONS = {".env", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rb", ".php", ".java", ".cs", ".tf"}
+TEXT_EXTENSIONS = {".env", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".md", ".mdx", ".prompt", ".ipynb", ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rb", ".php", ".java", ".cs", ".tf"}
 
 PATTERNS: list[tuple[str, str, str, str, str, str]] = [
     ("nhi_package_registry_token_detected", "NPM_TOKEN", r"\bnpm_[A-Za-z0-9]{10,}\b", "package registry token", "npm", "package registry"),

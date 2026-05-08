@@ -30,8 +30,10 @@ class CustomRule:
     id: str
     title: str
     severity: str
-    pattern: str
-    compiled: re.Pattern[str]
+    type: str
+    pattern: str | None
+    compiled: re.Pattern[str] | None
+    when: dict[str, Any]
     identity_type: str
     provider: str | None
     remediation: str
@@ -66,18 +68,26 @@ def load_rule_pack(path: str | Path | None) -> list[CustomRule]:
     rules = data.get("rules", []) if isinstance(data, dict) else []
     loaded: list[CustomRule] = []
     for rule in rules:
-        if not isinstance(rule, dict) or not rule.get("id") or not rule.get("pattern"):
+        if not isinstance(rule, dict) or not rule.get("id"):
             continue
-        compiled = _safe_compile(str(rule["pattern"]))
-        if compiled is None:
+        rule_type = str(rule.get("type", "regex")).lower()
+        pattern = str(rule["pattern"]) if rule.get("pattern") else None
+        compiled = _safe_compile(pattern) if pattern else None
+        when = rule.get("when", {}) if isinstance(rule.get("when", {}), dict) else {}
+        if rule_type == "structural":
+            if not when:
+                continue
+        elif compiled is None:
             continue
         loaded.append(
             CustomRule(
                 id=str(rule["id"]),
                 title=str(rule.get("title", rule["id"])),
                 severity=str(rule.get("severity", "medium")).lower(),
-                pattern=str(rule["pattern"]),
+                type=rule_type,
+                pattern=pattern,
                 compiled=compiled,
+                when=when,
                 identity_type=str(rule.get("identity_type", "custom token")),
                 provider=str(rule["provider"]) if rule.get("provider") else None,
                 remediation=str(rule.get("remediation", "Review, rotate if real, and move this value into a managed secret store.")),
@@ -93,6 +103,8 @@ def scan_custom_rules(path: Path, text: str, rules: list[CustomRule]) -> list[Si
         return signals
     for number, line in enumerate(text.splitlines(), 1):
         for rule in rules:
+            if rule.type == "structural" or rule.compiled is None:
+                continue
             for match in rule.compiled.finditer(line):
                 value = match.group(0)
                 if not looks_like_secret(value):
@@ -123,6 +135,8 @@ def custom_rule_templates(rules: list[CustomRule]) -> dict[str, dict[str, Any]]:
             "severity": rule.severity,
             "remediation": rule.remediation,
             "confidence": rule.confidence,
+            "type": rule.type,
+            "when": rule.when,
         }
         for rule in rules
     }

@@ -27,7 +27,11 @@ def sarif_dict(scan: ScanResult) -> dict:
                 "shortDescription": {"text": finding.title},
                 "fullDescription": {"text": finding.explanation},
                 "help": {
-                    "text": f"{finding.remediation}\n\nOWASP NHI: {', '.join(finding.owasp_nhi_refs) or 'Unmapped'}"
+                    "text": (
+                        f"{finding.remediation}\n\n"
+                        f"OWASP NHI: {', '.join(finding.owasp_nhi_refs) or 'Unmapped'}\n"
+                        f"AI risk refs: {', '.join(finding.ai_risk_refs) or 'Unmapped'}"
+                    )
                 },
                 "properties": {
                     "severity": finding.severity,
@@ -35,6 +39,7 @@ def sarif_dict(scan: ScanResult) -> dict:
                     "confidence": finding.confidence,
                     "category": finding.category,
                     "owasp_nhi_refs": finding.owasp_nhi_refs,
+                    "ai_risk_refs": finding.ai_risk_refs,
                     "control_hints": finding.control_hints,
                 },
             }
@@ -64,6 +69,7 @@ def sarif_dict(scan: ScanResult) -> dict:
                     "baseline_status": finding.baseline_status,
                     "related_identities": finding.related_identities,
                     "owasp_nhi_refs": finding.owasp_nhi_refs,
+                    "ai_risk_refs": finding.ai_risk_refs,
                 },
             }
         )

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from greynoc_nhi.constants import DEFAULT_DB_PATH
-from greynoc_nhi.models import Finding, NonHumanIdentity, ScanResult
+from greynoc_nhi.models import Finding, NonHumanIdentity, RiskPath, ScanResult
 
 
 def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
@@ -47,6 +47,11 @@ class Storage:
                     data_json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS findings (
+                    id TEXT PRIMARY KEY,
+                    scan_id TEXT NOT NULL,
+                    data_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS risk_paths (
                     id TEXT PRIMARY KEY,
                     scan_id TEXT NOT NULL,
                     data_json TEXT NOT NULL
@@ -106,6 +111,7 @@ class Storage:
             )
             conn.execute("DELETE FROM identities WHERE scan_id = ?", (scan_result.scan_id,))
             conn.execute("DELETE FROM findings WHERE scan_id = ?", (scan_result.scan_id,))
+            conn.execute("DELETE FROM risk_paths WHERE scan_id = ?", (scan_result.scan_id,))
             conn.executemany(
                 "INSERT OR REPLACE INTO identities VALUES (?, ?, ?)",
                 [(identity.id, scan_result.scan_id, json.dumps(identity.to_dict())) for identity in scan_result.identities],
@@ -113,6 +119,10 @@ class Storage:
             conn.executemany(
                 "INSERT OR REPLACE INTO findings VALUES (?, ?, ?)",
                 [(finding.id, scan_result.scan_id, json.dumps(finding.to_dict())) for finding in scan_result.findings],
+            )
+            conn.executemany(
+                "INSERT OR REPLACE INTO risk_paths VALUES (?, ?, ?)",
+                [(risk_path.id, scan_result.scan_id, json.dumps(risk_path.to_dict())) for risk_path in scan_result.risk_paths],
             )
 
     def list_scans(self) -> list[dict[str, Any]]:
@@ -132,6 +142,10 @@ class Storage:
                 Finding(**json.loads(row["data_json"]))
                 for row in conn.execute("SELECT data_json FROM findings WHERE scan_id = ?", (scan_id,))
             ]
+            risk_paths = [
+                RiskPath(**json.loads(row["data_json"]))
+                for row in conn.execute("SELECT data_json FROM risk_paths WHERE scan_id = ?", (scan_id,))
+            ]
         stats = json.loads(scan["stats_json"])
         return ScanResult(
             scan_id=scan["scan_id"],
@@ -140,6 +154,7 @@ class Storage:
             completed_at=scan["completed_at"],
             identities=identities,
             findings=findings,
+            risk_paths=risk_paths,
             overall_score=scan["overall_score"],
             summary=scan["summary"],
             stats=stats,
@@ -155,7 +170,7 @@ class Storage:
 
     def clear_all(self) -> None:
         with self.connect() as conn:
-            conn.executescript("DELETE FROM reports; DELETE FROM findings; DELETE FROM identities; DELETE FROM scans;")
+            conn.executescript("DELETE FROM reports; DELETE FROM risk_paths; DELETE FROM findings; DELETE FROM identities; DELETE FROM scans;")
 
 
 def save_scan(scan_result: ScanResult, db_path: str | Path = DEFAULT_DB_PATH) -> None:

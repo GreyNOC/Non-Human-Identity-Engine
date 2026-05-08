@@ -45,6 +45,9 @@ def make_signal(
     rotation_status: str | None = None,
     context_store: str | None = None,
     memory_enabled: bool | None = None,
+    ai_risk_refs: list[str] | None = None,
+    ai_attack_class: str | None = None,
+    attack_chain_stage: str | None = None,
     related_identities: list[str] | None = None,
     confidence: str | None = None,
 ) -> Signal:
@@ -85,6 +88,9 @@ def make_signal(
         "rotation_status": rotation_status,
         "context_store": redact_inline_secret(context_store) if context_store else None,
         "memory_enabled": memory_enabled,
+        "ai_risk_refs": ai_risk_refs or [],
+        "ai_attack_class": ai_attack_class,
+        "attack_chain_stage": attack_chain_stage,
         "related_identities": related_identities or [],
         "confidence": infer_confidence(rule_id, masked_evidence, secret_value, confidence),
     }
