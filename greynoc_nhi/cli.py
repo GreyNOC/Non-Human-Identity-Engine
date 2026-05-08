@@ -38,6 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diff", action="store_true", help="Scan only files changed in <base>...HEAD (default base origin/main)")
     parser.add_argument("--diff-staged", action="store_true", help="Scan only files staged for commit (use in pre-commit hooks)")
     parser.add_argument("--base", default="origin/main", help="Base ref for --diff (default origin/main)")
+    parser.add_argument("--host-audit", action="store_true", help="Run a read-only host audit instead of a repo scan")
+    parser.add_argument("--linux-auth-audit", action="store_true", help="Audit Linux PAM/SSH auth paths under --host-root")
+    parser.add_argument("--host-root", default="/", help="Host root to inspect for --host-audit/--linux-auth-audit (default /)")
+    parser.add_argument("--no-elf-strings", action="store_true", help="Skip bounded string extraction from PAM .so files during host audit")
     parser.add_argument("--install-hook", metavar="REPO", nargs="?", const=".", help="Install a git pre-commit hook into REPO (default: current directory)")
     parser.add_argument("--uninstall-hook", metavar="REPO", nargs="?", const=".", help="Remove the GreyNOC NHI pre-commit hook from REPO")
     parser.add_argument("--install-hook-framework", action="store_true", help="Also write .pre-commit-hooks.yaml when installing the hook")
@@ -109,6 +113,15 @@ def scan_with_json_report(engine: Engine, project_path: str | Path, args) -> tup
         generate_sarif_report(scan_result, args.sarif_out)
     report_path = generate_json_report(scan_result, args.out)
     return scan_result, report_path
+
+
+def host_audit_with_reports(engine: Engine, args) -> tuple[object, dict[str, Path]]:
+    scan_result = engine.run_host_audit(
+        args.host_root,
+        baseline_path=args.baseline,
+        no_elf_strings=bool(args.no_elf_strings),
+    )
+    return _post_process(scan_result, args)
 
 
 EXIT_CLEAN = 0
@@ -208,6 +221,14 @@ def main(argv: list[str] | None = None) -> int:
     engine = Engine(args.db, rule_pack_path=args.rules, cache_enabled=not args.no_cache)
     if args.clear_cache and engine.cache is not None:
         engine.cache.clear()
+    if args.host_audit or args.linux_auth_audit:
+        result, reports = with_cli_indicator(
+            "Auditing Linux PAM/SSH host auth",
+            lambda: host_audit_with_reports(engine, args),
+        )
+        trend = _maybe_trend(engine, result, args)
+        print_summary(result, reports, trend=trend)
+        return exit_code_for_baseline(result, args)
     if args.load_samples:
         result, reports = with_cli_indicator(
             "Scanning sample project",

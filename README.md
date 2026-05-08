@@ -65,7 +65,7 @@ All detected values are masked. Full secrets are never printed in terminal outpu
 
 ## Safe Secret Handling
 
-The engine stores only safe evidence: masked secret display, stable secret fingerprint, file path, line number, rule ID, redacted evidence, and identity metadata. It redacts bearer tokens, API keys, private keys, OAuth secrets, webhook secrets, high-entropy strings, and credential assignment lines before data enters reports or persistence. It never validates, replays, or calls out with discovered credentials.
+The engine stores only safe evidence: masked secret display, scan-local secret fingerprint, file path, line number, rule ID, redacted evidence, and identity metadata. By default, secret fingerprints are non-reversible and scan-local. Cross-scan stable fingerprints require an explicit local HMAC key and are never generated with unsalted SHA-256. It redacts bearer tokens, API keys, private keys, OAuth secrets, webhook secrets, high-entropy strings, and credential assignment lines before data enters reports or persistence. It never validates, replays, or calls out with discovered credentials.
 
 ## Install
 
@@ -110,6 +110,14 @@ Scan a specific project:
 ```bash
 python -m greynoc_nhi --scan ./greynoc_nhi/data/sample_project --out ./reports
 ```
+
+Run a read-only Linux PAM/SSH host audit:
+
+```bash
+python -m greynoc_nhi --host-audit --linux-auth-audit --host-root / --out ./reports
+```
+
+Host audit inspects `/etc/pam.d/*`, `/etc/ssh/sshd_config`, and PAM module directories under `/lib`, `/usr/lib*`, and `/usr/local/lib*`. It reads config, metadata, ownership/mode, timestamps, and bounded `.so` strings only. It never executes PAM modules. Use `--no-elf-strings` to skip bounded string extraction from shared objects.
 
 Generate JSON output:
 

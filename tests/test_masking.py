@@ -1,6 +1,8 @@
 import hashlib
 
-from greynoc_nhi.masking import fingerprint_secret, mask_secret
+import pytest
+
+from greynoc_nhi.masking import fingerprint_secret, mask_secret, redact_inline_secret
 
 
 def test_mask_secret_never_returns_full_value():
@@ -19,3 +21,16 @@ def test_secret_fingerprint_is_keyed_by_default():
     assert fingerprint_secret(secret, key=b"test") == fingerprint_secret(secret, key=b"test")
     assert fingerprint_secret(secret, key=b"test") != hashlib.sha256(secret.encode("utf-8")).hexdigest()
     assert fingerprint_secret(secret, key=b"one") != fingerprint_secret(secret, key=b"two")
+
+
+def test_stable_secret_fingerprint_requires_hmac_key():
+    secret = "GNOC_FAKE_SECRET_DO_NOT_USE"
+    with pytest.raises(ValueError):
+        fingerprint_secret(secret, stable=True)
+    assert fingerprint_secret(secret, key=b"local-stable-key", stable=True) == fingerprint_secret(secret, key=b"local-stable-key", stable=True)
+
+
+def test_inline_evidence_redaction_omits_fingerprint():
+    redacted = redact_inline_secret("API_KEY=GNOC_FAKE_SECRET_DO_NOT_USE_ARTIFACT_LEAK_123456")
+    assert "GNOC_FAKE_SECRET_DO_NOT_USE" not in redacted
+    assert "fp=" not in redacted

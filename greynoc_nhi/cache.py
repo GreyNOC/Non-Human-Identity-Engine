@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from greynoc_nhi.masking import mask_secret, redact_inline_secret
-from greynoc_nhi.utils import chmod_private_dir, chmod_private_file
+from greynoc_nhi.utils import assert_no_raw_secret_markers, chmod_private_dir, chmod_sqlite_sidecars
 
 SENSITIVE_SIGNAL_KEYS = {"secret_value"}
 SENSITIVE_TEXT_KEYS = {"evidence", "raw_reference", "context_store"}
@@ -73,7 +73,7 @@ def _sanitize_signal_text(value: Any, secret_value: Any | None) -> Any:
         return None
     text = str(value)
     if secret_value:
-        text = text.replace(str(secret_value), mask_secret(str(secret_value)))
+        text = text.replace(str(secret_value), mask_secret(str(secret_value), include_fingerprint=False))
     return redact_inline_secret(text)
 
 
@@ -92,7 +92,7 @@ class ParserCache:
             chmod_private_dir(self.db_path.parent)
             with self._connect() as conn:
                 conn.executescript(CACHE_SCHEMA)
-            chmod_private_file(self.db_path)
+            chmod_sqlite_sidecars(self.db_path)
 
     def enabled(self) -> bool:
         return self.db_path is not None
@@ -135,6 +135,7 @@ class ParserCache:
         key = _make_key(content_sha, parser_version)
         cached_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         safe_signals = sanitize_signals_for_disk(signals)
+        assert_no_raw_secret_markers(safe_signals)
         try:
             with self._connect() as conn:
                 conn.execute(
@@ -142,7 +143,7 @@ class ParserCache:
                     (key, parser_version, json.dumps(safe_signals), cached_at),
                 )
             assert self.db_path is not None
-            chmod_private_file(self.db_path)
+            chmod_sqlite_sidecars(self.db_path)
         except sqlite3.OperationalError:
             return
 
@@ -152,6 +153,8 @@ class ParserCache:
         try:
             with self._connect() as conn:
                 conn.execute("DELETE FROM parser_cache")
+            assert self.db_path is not None
+            chmod_sqlite_sidecars(self.db_path)
         except sqlite3.OperationalError:
             return
 

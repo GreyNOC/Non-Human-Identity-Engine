@@ -69,6 +69,11 @@ SCAN_FILE_NAMES = {
     ".renovaterc.json5",
     "dependabot.yml",
     "dependabot.yaml",
+    "sshd_config",
+    "sshd",
+    "common-auth",
+    "system-auth",
+    "password-auth",
 }
 
 SCAN_EXTENSIONS = {
@@ -104,6 +109,11 @@ SCAN_EXTENSIONS = {
     ".cs",
     ".tf",
     ".bicep",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".ps1",
+    ".cloud-init",
 }
 
 MAX_FILE_BYTES = 2 * 1024 * 1024

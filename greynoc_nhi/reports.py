@@ -13,7 +13,7 @@ from greynoc_nhi.ai_mapping import describe_ai_ref
 from greynoc_nhi.owasp_mapping import describe_ref
 from greynoc_nhi.sarif import generate_sarif_report
 from greynoc_nhi.scoring import severity_label
-from greynoc_nhi.utils import chmod_private_dir, chmod_private_file, utc_now
+from greynoc_nhi.utils import assert_no_raw_secret_markers, chmod_private_dir, chmod_private_file, utc_now
 
 
 def _ensure_out(out_dir: str | Path | None) -> Path:
@@ -29,7 +29,9 @@ def _join(items: list[str]) -> str:
 
 def generate_json_report(scan: ScanResult, out_dir: str | Path | None = None) -> Path:
     out = _ensure_out(out_dir) / f"{scan.scan_id}.json"
-    out.write_text(json.dumps(scan.to_dict(), indent=2), encoding="utf-8")
+    content = json.dumps(scan.to_dict(), indent=2)
+    assert_no_raw_secret_markers(content)
+    out.write_text(content, encoding="utf-8")
     chmod_private_file(out)
     return out
 
@@ -95,7 +97,9 @@ def generate_markdown_report(scan: ScanResult, out_dir: str | Path | None = None
         "## Safety Disclaimer",
         "This was a local defensive scan. No credential validation was performed and no external systems were accessed.",
     ])
-    out.write_text("\n".join(lines), encoding="utf-8")
+    content = "\n".join(lines)
+    assert_no_raw_secret_markers(content)
+    out.write_text(content, encoding="utf-8")
     chmod_private_file(out)
     return out
 
@@ -294,6 +298,7 @@ footer {{ color:#52616a; font-size:12px; margin-top:34px; border-top:1px solid #
 <section><h2>Evidence Appendix</h2><p>All evidence is masked. Full secrets are never displayed, validated, or used.</p></section>
 <footer>Safety disclaimer: local defensive scan only. No credential validation performed. No external systems accessed. Generated {html.escape(utc_now())}.</footer>
 </main>{INTERACTIVE_JS}</body></html>"""
+    assert_no_raw_secret_markers(body)
     out.write_text(body, encoding="utf-8")
     chmod_private_file(out)
     return out

@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import re
 import secrets
+from dataclasses import dataclass
 
 from greynoc_nhi.confidence import is_placeholder_value
 
@@ -62,12 +63,14 @@ def _secret_label(value: str) -> str:
     return "secret"
 
 
-def mask_secret(value: str, *, fingerprint_key: bytes | str | None = None) -> str:
+def mask_secret(value: str, *, fingerprint_key: bytes | str | None = None, include_fingerprint: bool = True) -> str:
     """Return a display-safe masked representation of a secret-like value."""
     value = str(value).strip()
     if value.startswith("[REDACTED:"):
         return value
     label = _secret_label(value)
+    if not include_fingerprint:
+        return f"[REDACTED:{label} len={len(value)}]"
     fp = fingerprint_secret(value, key=fingerprint_key)[:8]
     return f"[REDACTED:{label} len={len(value)} fp={fp}]"
 
@@ -76,12 +79,35 @@ def fingerprint_secret(value: str, *, key: bytes | str | None = None, stable: bo
     """Return a non-reversible fingerprint without storing the original value.
 
     By default this uses an in-memory random HMAC key. Callers that need
-    explicit cross-process stability must opt into stable=True.
+    explicit cross-process stability must pass their own HMAC key. Raw,
+    unsalted hashes are never returned for secret values.
     """
     raw = str(value).encode("utf-8")
-    if stable:
-        return hashlib.sha256(raw).hexdigest()
+    if stable and key is None:
+        raise ValueError("Stable fingerprints require an HMAC key")
     return hmac.new(_key_bytes(key), raw, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True)
+class RedactionContext:
+    """Per-scan redaction context for display masks and fingerprints."""
+
+    fingerprint_key: bytes
+    stable_key: bytes | None = None
+
+    @classmethod
+    def for_scan(cls) -> "RedactionContext":
+        return cls(fingerprint_key=secrets.token_bytes(32))
+
+    def mask(self, value: str, *, include_fingerprint: bool = True) -> str:
+        return mask_secret(value, fingerprint_key=self.fingerprint_key, include_fingerprint=include_fingerprint)
+
+    def fingerprint(self, value: str, *, stable: bool = False) -> str:
+        key = self.stable_key if stable else self.fingerprint_key
+        return fingerprint_secret(value, key=key, stable=stable)
+
+    def redact_text(self, text: str, *, include_fingerprint: bool = False) -> str:
+        return redact_inline_secret(text, fingerprint_key=self.fingerprint_key, include_fingerprint=include_fingerprint)
 
 
 def looks_like_secret(value: str) -> bool:
@@ -100,37 +126,41 @@ def looks_like_secret(value: str) -> bool:
     return False
 
 
-def _mask_high_entropy_match(match: re.Match[str]) -> str:
+def _mask_high_entropy_match(match: re.Match[str], fingerprint_key: bytes | str | None, include_fingerprint: bool) -> str:
     value = match.group(1)
-    if is_placeholder_value(value):
+    if is_placeholder_value(value) and "GNOC_FAKE_SECRET_DO_NOT_USE" not in value:
         return value
     has_alpha = bool(re.search(r"[A-Za-z]", value))
     has_digit = bool(re.search(r"\d", value))
     has_mixed_case = bool(re.search(r"[a-z]", value) and re.search(r"[A-Z]", value))
     if has_alpha and (has_digit or has_mixed_case or any(char in value for char in "_+=-")):
-        return mask_secret(value)
+        return mask_secret(value, fingerprint_key=fingerprint_key, include_fingerprint=include_fingerprint)
     return value
 
 
-def redact_inline_secret(text: str) -> str:
+def redact_inline_secret(text: str, *, fingerprint_key: bytes | str | None = None, include_fingerprint: bool = False) -> str:
     """Mask obvious assignment or URL password values in evidence text."""
     safe = str(text)
     safe = PRIVATE_KEY_BLOCK_RE.sub("[REDACTED PRIVATE KEY BLOCK]", safe)
-    safe = re.sub(r"(://[^:\s/]+:)([^@\s/]+)(@)", lambda m: m.group(1) + mask_secret(m.group(2)) + m.group(3), safe)
+    safe = re.sub(
+        r"(://[^:\s/]+:)([^@\s/]+)(@)",
+        lambda m: m.group(1) + mask_secret(m.group(2), fingerprint_key=fingerprint_key, include_fingerprint=include_fingerprint) + m.group(3),
+        safe,
+    )
     safe = re.sub(
         r"(?i)(authorization\s*[:=]\s*['\"]?bearer\s+)([A-Za-z0-9_\-.=+/]{8,})",
-        lambda m: m.group(1) + mask_secret(m.group(2)),
+        lambda m: m.group(1) + mask_secret(m.group(2), fingerprint_key=fingerprint_key, include_fingerprint=include_fingerprint),
         safe,
     )
     safe = re.sub(
         r"(?i)(\bbearer\s+)([A-Za-z0-9_\-.=+/]{16,})",
-        lambda m: m.group(1) + mask_secret(m.group(2)),
+        lambda m: m.group(1) + mask_secret(m.group(2), fingerprint_key=fingerprint_key, include_fingerprint=include_fingerprint),
         safe,
     )
     safe = re.sub(
         r"(?i)(secret|token|password|api[_-]?key|client[_-]?secret|private[_-]?key|webhook[_-]?secret)(\s*[:=]\s*)(['\"]?)([^'\"\s,}]+)",
-        lambda m: m.group(1) + m.group(2) + m.group(3) + mask_secret(m.group(4)),
+        lambda m: m.group(1) + m.group(2) + m.group(3) + mask_secret(m.group(4), fingerprint_key=fingerprint_key, include_fingerprint=include_fingerprint),
         safe,
     )
-    safe = HIGH_ENTROPY_RE.sub(_mask_high_entropy_match, safe)
+    safe = HIGH_ENTROPY_RE.sub(lambda m: _mask_high_entropy_match(m, fingerprint_key, include_fingerprint), safe)
     return safe

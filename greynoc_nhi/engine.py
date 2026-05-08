@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import secrets
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,7 @@ from greynoc_nhi.cache import ParserCache, parser_version_string
 from greynoc_nhi.confidence import normalize_confidence
 from greynoc_nhi.constants import MAX_FILE_BYTES
 from greynoc_nhi.custom_rules import custom_rule_templates
-from greynoc_nhi.masking import fingerprint_secret, mask_secret, redact_inline_secret
+from greynoc_nhi.masking import RedactionContext, fingerprint_secret, mask_secret, redact_inline_secret
 from greynoc_nhi.models import Finding, NonHumanIdentity, ScanResult
 from greynoc_nhi.ownership import enrich_identity_owners
 from greynoc_nhi.parsers import PARSERS
@@ -43,6 +42,7 @@ SUPPORTED_IDENTITY_TYPES = {
     "api_key",
     "bot_account",
     "deployment_identity",
+    "linux_auth_module",
 }
 
 IDENTITY_TYPE_ALIASES = {
@@ -73,6 +73,8 @@ IDENTITY_TYPE_ALIASES = {
     "deployment token": "deployment_identity",
     "deployment identity": "deployment_identity",
     "automation script credential": "deployment_identity",
+    "linux pam module": "linux_auth_module",
+    "linux auth module": "linux_auth_module",
 }
 
 
@@ -143,8 +145,8 @@ def _safe_text(value: object | None, secret_value: object | None = None, fingerp
         return None
     text = str(value)
     if secret_value:
-        text = text.replace(str(secret_value), mask_secret(str(secret_value), fingerprint_key=fingerprint_key))
-    return redact_inline_secret(text)
+        text = text.replace(str(secret_value), mask_secret(str(secret_value), fingerprint_key=fingerprint_key, include_fingerprint=False))
+    return redact_inline_secret(text, fingerprint_key=fingerprint_key, include_fingerprint=False)
 
 
 def _safe_evidence(value: object, secret_value: object | None = None, fingerprint_key: bytes | str | None = None) -> list[str]:
@@ -323,7 +325,7 @@ def normalize_signal(signal: dict, fingerprint_key: bytes | str | None = None) -
         commit_short_sha=_safe_text(signal.get("commit_short_sha")),
         commit_author=_safe_text(signal.get("commit_author")),
         commit_date=_safe_text(signal.get("commit_date")),
-    )
+    ) 
 
 
 class Engine:
@@ -364,7 +366,8 @@ class Engine:
     ) -> ScanResult:
         started = utc_now()
         correlation_id = str(uuid4())
-        fingerprint_key = secrets.token_bytes(32)
+        redaction = RedactionContext.for_scan()
+        fingerprint_key = redaction.fingerprint_key
         fatal_errors: list[str] = []
         if history_only and not scan_history:
             scan_history = True
@@ -519,6 +522,136 @@ class Engine:
                 "cache_hits": raw.get("cache_hits", 0),
                 "cache_misses": raw.get("cache_misses", 0),
                 "owners_enriched": owners_enriched,
+                "scan_surface": "git_history" if history_only else "ci_diff" if (diff_mode or diff_staged) else "repo",
+            },
+            scan_trust_level=scan_trust_level,
+            policy_decision=policy_decision,
+            fatal_errors=fatal_errors,
+            correlation_id=correlation_id,
+        )
+        if baseline_path:
+            apply_baseline(result, baseline_path)
+        allow_untrusted = self.allow_untrusted_persist if allow_untrusted_persist is None else allow_untrusted_persist
+        if persist and self.storage and (result.scan_trust_level != "untrusted" or allow_untrusted):
+            self.storage.save_scan(result)
+        return result
+
+    def run_host_audit(
+        self,
+        host_root: str | Path = "/",
+        persist: bool = True,
+        baseline_path: str | Path | None = None,
+        allow_untrusted_persist: bool | None = None,
+        *,
+        no_elf_strings: bool = False,
+    ) -> ScanResult:
+        """Run a read-only Linux PAM/SSH host audit."""
+        from greynoc_nhi.host_audit import audit_linux_auth
+
+        started = utc_now()
+        correlation_id = str(uuid4())
+        redaction = RedactionContext.for_scan()
+        fingerprint_key = redaction.fingerprint_key
+        fatal_errors: list[str] = []
+        try:
+            raw = audit_linux_auth(host_root, no_elf_strings=no_elf_strings)
+        except Exception as exc:
+            raw = {
+                "project_path": str(Path(host_root).resolve()),
+                "signals": [],
+                "errors": [],
+                "scanned_files": 0,
+                "skipped_files": 0,
+                "ignore_patterns": [],
+                "custom_rules": [],
+                "cache_hits": 0,
+                "cache_misses": 0,
+                "host_audit": {"linux_auth": True, "no_elf_strings": no_elf_strings},
+            }
+            fatal_errors.append(f"host audit failure: {redact_inline_secret(str(exc))}")
+
+        identities: list[NonHumanIdentity] = []
+        normalization_errors: list[dict[str, str]] = []
+        for signal in raw.get("signals", []):
+            try:
+                identities.append(normalize_signal(signal, fingerprint_key=fingerprint_key))
+            except Exception as exc:
+                normalization_errors.append({"signal": redact_inline_secret(str(signal.get("rule_id", "unknown"))), "error": redact_inline_secret(str(exc))})
+
+        advanced_signals: list[dict[str, Any]] = []
+        if not fatal_errors:
+            try:
+                advanced_signals = synthesize_advanced_signals(identities, raw)
+                for signal in advanced_signals:
+                    identities.append(normalize_signal(signal, fingerprint_key=fingerprint_key))
+            except Exception as exc:
+                fatal_errors.append(f"advanced correlation failure: {redact_inline_secret(str(exc))}")
+
+        findings: list[Finding] = []
+        if not fatal_errors:
+            try:
+                findings = run_rules(identities, custom_rule_templates(raw.get("custom_rules", [])))
+            except Exception as exc:
+                fatal_errors.append(f"rule evaluation failure: {redact_inline_secret(str(exc))}")
+        risk_paths = []
+        if not fatal_errors:
+            try:
+                risk_paths = derive_risk_paths(identities, raw)
+            except Exception as exc:
+                fatal_errors.append(f"risk path derivation failure: {redact_inline_secret(str(exc))}")
+
+        parser_errors = [
+            {key: redact_inline_secret(value) for key, value in error.items()}
+            for error in raw.get("errors", [])
+        ]
+        overall = 100 if fatal_errors else calculate_overall_score(identities, findings)
+        completed = utc_now()
+        critical = sum(1 for f in findings if f.severity == "critical")
+        high = sum(1 for f in findings if f.severity == "high")
+        scan_trust_level = _scan_trust_level(fatal_errors, parser_errors, normalization_errors, findings)
+        policy_decision = _policy_decision(scan_trust_level, findings)
+        if fatal_errors:
+            summary = "Host audit could not be trusted because the engine encountered a fatal execution error."
+        elif parser_errors or normalization_errors:
+            summary = f"Host audit completed in a degraded state with {len(parser_errors) + len(normalization_errors)} parser or normalization errors."
+        elif findings:
+            summary = f"Host audit found {critical} critical and {high} high Linux auth findings. Highest-risk issue: {findings[0].title}."
+        else:
+            summary = "No high-confidence Linux PAM/SSH host-audit risks were found."
+        result = ScanResult(
+            scan_id=compute_scan_id(raw["project_path"], started, len(identities), len(findings)),
+            project_path=raw["project_path"],
+            started_at=started,
+            completed_at=completed,
+            identities=identities,
+            findings=findings,
+            risk_paths=risk_paths,
+            overall_score=overall,
+            summary=summary,
+            stats={
+                "scanned_files": raw.get("scanned_files", 0),
+                "skipped_files": raw.get("skipped_files", 0),
+                "parser_errors": parser_errors,
+                "normalization_errors": normalization_errors,
+                "advanced_correlations": len(advanced_signals),
+                "risk_paths": len(risk_paths),
+                "custom_rules_loaded": 0,
+                "severity_label": severity_label(overall),
+                "critical_findings": critical,
+                "high_findings": high,
+                "identities_found": len(identities),
+                "findings_count": len(findings),
+                "scan_trust_level": scan_trust_level,
+                "policy_decision": policy_decision,
+                "fatal_errors": fatal_errors,
+                "correlation_id": correlation_id,
+                "history": {"enabled": False, "commits_scanned": 0, "history_signals": 0},
+                "diff": {"enabled": False, "files": 0, "base": None, "staged": False},
+                "cache_hits": 0,
+                "cache_misses": 0,
+                "owners_enriched": 0,
+                "scan_surface": "host",
+                "host_audit": raw.get("host_audit", {}),
             },
             scan_trust_level=scan_trust_level,
             policy_decision=policy_decision,

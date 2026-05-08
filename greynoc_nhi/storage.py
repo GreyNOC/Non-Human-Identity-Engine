@@ -11,7 +11,7 @@ from typing import Any
 
 from greynoc_nhi.constants import DEFAULT_DB_PATH
 from greynoc_nhi.models import Finding, NonHumanIdentity, RiskPath, ScanResult
-from greynoc_nhi.utils import chmod_private_dir, chmod_private_file
+from greynoc_nhi.utils import assert_no_raw_secret_markers, chmod_private_dir, chmod_sqlite_sidecars
 
 
 def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
@@ -24,7 +24,7 @@ class Storage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         chmod_private_dir(self.db_path.parent)
         self.init_db()
-        chmod_private_file(self.db_path)
+        chmod_sqlite_sidecars(self.db_path)
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)
@@ -100,6 +100,7 @@ class Storage:
         stats.setdefault("policy_decision", scan_result.policy_decision)
         stats.setdefault("fatal_errors", scan_result.fatal_errors)
         stats.setdefault("correlation_id", scan_result.correlation_id)
+        assert_no_raw_secret_markers(scan_result.to_dict())
         with self.connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO scans VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -128,7 +129,7 @@ class Storage:
                 "INSERT OR REPLACE INTO risk_paths VALUES (?, ?, ?)",
                 [(risk_path.id, scan_result.scan_id, json.dumps(risk_path.to_dict())) for risk_path in scan_result.risk_paths],
             )
-        chmod_private_file(self.db_path)
+        chmod_sqlite_sidecars(self.db_path)
 
     def list_scans(self) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -172,10 +173,12 @@ class Storage:
     def save_report(self, scan_id: str, report_type: str, path: str, created_at: str) -> None:
         with self.connect() as conn:
             conn.execute("INSERT INTO reports (scan_id, report_type, path, created_at) VALUES (?, ?, ?, ?)", (scan_id, report_type, path, created_at))
+        chmod_sqlite_sidecars(self.db_path)
 
     def clear_all(self) -> None:
         with self.connect() as conn:
             conn.executescript("DELETE FROM reports; DELETE FROM risk_paths; DELETE FROM findings; DELETE FROM identities; DELETE FROM scans;")
+        chmod_sqlite_sidecars(self.db_path)
 
 
 def save_scan(scan_result: ScanResult, db_path: str | Path = DEFAULT_DB_PATH) -> None:

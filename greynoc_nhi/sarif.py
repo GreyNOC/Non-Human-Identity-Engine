@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from greynoc_nhi.models import Finding, ScanResult
-from greynoc_nhi.utils import chmod_private_dir, chmod_private_file
+from greynoc_nhi.utils import assert_no_raw_secret_markers, chmod_private_dir, chmod_private_file
 
 SARIF_VERSION = "2.1.0"
 
@@ -105,6 +105,8 @@ def generate_sarif_report(scan: ScanResult, output_path: str | Path) -> Path:
     else:
         out.parent.mkdir(parents=True, exist_ok=True)
     chmod_private_dir(out.parent)
-    out.write_text(json.dumps(sarif_dict(scan), indent=2), encoding="utf-8")
+    content = json.dumps(sarif_dict(scan), indent=2)
+    assert_no_raw_secret_markers(content)
+    out.write_text(content, encoding="utf-8")
     chmod_private_file(out)
     return out

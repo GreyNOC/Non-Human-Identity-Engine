@@ -52,10 +52,10 @@ def make_signal(
     confidence: str | None = None,
 ) -> Signal:
     if secret_value:
-        evidence = evidence.replace(secret_value, mask_secret(secret_value))
+        evidence = evidence.replace(secret_value, mask_secret(secret_value, include_fingerprint=False))
     masked_evidence = redact_inline_secret(evidence)
     if secret_value:
-        masked_evidence = masked_evidence.replace(secret_value, mask_secret(secret_value))
+        masked_evidence = masked_evidence.replace(secret_value, mask_secret(secret_value, include_fingerprint=False))
     return {
         "id": stable_id("sig", file_path, line_number, rule_id, name, masked_evidence),
         "rule_id": rule_id,

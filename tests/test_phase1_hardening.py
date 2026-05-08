@@ -120,9 +120,14 @@ def test_raw_secret_never_leaks_to_reports_or_storage():
         generate_json_report(result, temp_dir),
         generate_markdown_report(result, temp_dir),
         generate_sarif_report(result, temp_dir / "scan.sarif"),
+        write_baseline(result, temp_dir / "baseline.json"),
     ]
     for output in outputs:
         assert raw_secret not in output.read_text(encoding="utf-8")
     loaded = Storage(db_path).get_scan(result.scan_id)
     assert loaded is not None
     assert raw_secret not in json.dumps(loaded.to_dict())
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        artifact = Path(f"{db_path}{suffix}")
+        if artifact.exists():
+            assert raw_secret.encode() not in artifact.read_bytes()

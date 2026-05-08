@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+RAW_SECRET_MARKER_RE = re.compile(r"GNOC_FAKE_SECRET_DO_NOT_USE|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 
 
 def utc_now() -> str:
@@ -34,18 +38,35 @@ def read_text_safely(path: Path) -> str | None:
 
 def chmod_private_file(path: Path) -> None:
     """Best-effort owner-only permissions for local sensitive artifacts."""
+    if os.name == "nt":
+        return
     try:
         path.chmod(0o600)
     except OSError:
         pass
 
 
+def chmod_sqlite_sidecars(path: Path) -> None:
+    """Apply private permissions to a SQLite file and any journal sidecars."""
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        chmod_private_file(Path(f"{path}{suffix}"))
+
+
 def chmod_private_dir(path: Path) -> None:
     """Best-effort owner-only directory permissions for local scan artifacts."""
+    if os.name == "nt":
+        return
     try:
         path.chmod(0o700)
     except OSError:
         pass
+
+
+def assert_no_raw_secret_markers(payload: object) -> None:
+    """Fail closed before writing artifacts that still contain raw secret markers."""
+    text = payload if isinstance(payload, str) else json.dumps(payload, default=str)
+    if RAW_SECRET_MARKER_RE.search(text):
+        raise ValueError("Refusing to write artifact containing raw secret marker")
 
 
 def parse_json_safely(text: str) -> Any | None:
