@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import (
+    ai_code_flows,
     ai_agents,
     browser_extensions,
     cloud_credentials,
@@ -12,9 +13,12 @@ from . import (
     github_actions,
     kubernetes,
     mcp_configs,
+    mcp_supply_chain,
     modern_saas,
     oauth_configs,
     package_json,
+    prompt_artifacts,
+    rag_configs,
     python_requirements,
     terraform,
     webhooks,
@@ -31,8 +35,12 @@ PARSERS = [
     oauth_configs,
     cloud_credentials,
     browser_extensions,
+    prompt_artifacts,
     ai_agents,
     mcp_configs,
+    mcp_supply_chain,
+    rag_configs,
+    ai_code_flows,
     modern_saas,
     webhooks,
     python_requirements,

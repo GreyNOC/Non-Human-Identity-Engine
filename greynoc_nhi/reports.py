@@ -9,6 +9,7 @@ from pathlib import Path
 
 from greynoc_nhi.constants import DEFAULT_REPORTS_DIR
 from greynoc_nhi.models import Finding, NonHumanIdentity, ScanResult
+from greynoc_nhi.ai_mapping import describe_ai_ref
 from greynoc_nhi.owasp_mapping import describe_ref
 from greynoc_nhi.sarif import generate_sarif_report
 from greynoc_nhi.scoring import severity_label
@@ -57,7 +58,11 @@ def generate_markdown_report(scan: ScanResult, out_dir: str | Path | None = None
         "## NHI Inventory",
     ]
     for identity in scan.identities:
-        lines.append(f"- **{identity.name}** ({identity.identity_type}) from {identity.source}; provider={identity.provider or '-'}; source={identity.source_file or '-'}:{identity.source_line or '-'}; risk={_join(identity.tags)}; secret={identity.masked_secret or '-'}")
+        lines.append(f"- **{identity.name}** ({identity.identity_type}) from {identity.source}; provider={identity.provider or '-'}; source={identity.source_file or '-'}:{identity.source_line or '-'}; risk={_join(identity.tags)}; ai={_join(identity.ai_risk_refs)}; secret={identity.masked_secret or '-'}")
+    if scan.risk_paths:
+        lines.extend(["", "## AI Action Paths"])
+        for risk_path in scan.risk_paths:
+            lines.append(f"- **{risk_path.attack_class}**: {risk_path.source} -> {risk_path.agent or '-'} -> {risk_path.tool or '-'} -> {risk_path.sink}; boundary={risk_path.trust_boundary}; evidence={'; '.join(risk_path.evidence)}")
     lines.extend(["", "## Findings"])
     for finding in scan.findings:
         lines.extend([
@@ -75,6 +80,7 @@ def generate_markdown_report(scan: ScanResult, out_dir: str | Path | None = None
             f"- Remediation: {finding.remediation}",
             f"- Control hints: {_join(finding.control_hints)}",
             f"- OWASP NHI: {_join(finding.owasp_nhi_refs)}",
+            f"- AI risk refs: {_join(finding.ai_risk_refs)}",
             "",
         ])
     lines.extend([
@@ -103,10 +109,10 @@ def _table_rows_identities(identities: list[NonHumanIdentity]) -> str:
             "<tr>"
             f"<td>{html.escape(item.identity_type)}</td><td>{html.escape(item.source)}</td><td>{html.escape(item.name)}</td>"
             f"<td>{html.escape(item.provider or '-')}</td><td>{html.escape(item.environment or '-')}</td><td>{html.escape(item.owner or '-')}</td>"
-            f"<td>{html.escape(item.source_file or '-')}:{item.source_line or '-'}</td><td>{html.escape(_join(item.permissions + item.scopes + item.tools))}</td><td>{html.escape(risk)}</td>"
+            f"<td>{html.escape(item.source_file or '-')}:{item.source_line or '-'}</td><td>{html.escape(_join(item.permissions + item.scopes + item.tools))}</td><td>{html.escape(risk)}</td><td>{html.escape(_join(item.ai_risk_refs))}</td>"
             "</tr>"
         )
-    return "\n".join(rows) or '<tr><td colspan="9">No identities found.</td></tr>'
+    return "\n".join(rows) or '<tr><td colspan="10">No identities found.</td></tr>'
 
 
 def _table_rows_findings(findings: list[Finding]) -> str:
@@ -116,15 +122,29 @@ def _table_rows_findings(findings: list[Finding]) -> str:
             "<tr>"
             f"<td>{_badge(finding.severity)}</td><td>{finding.risk_score}</td><td>{html.escape(finding.confidence)}</td><td>{html.escape(finding.baseline_status)}</td><td>{html.escape(finding.rule_id)}</td>"
             f"<td>{html.escape(finding.category)}</td><td>{html.escape(finding.file_path or '-')}</td><td>{finding.line_number or '-'}</td>"
-            f"<td>{html.escape('; '.join(finding.evidence))}</td><td>{html.escape(_join(finding.related_identities))}</td><td>{html.escape(finding.why_it_matters)}</td><td>{html.escape(finding.remediation)}</td><td>{html.escape(_join(finding.control_hints))}</td><td>{html.escape(_join(finding.owasp_nhi_refs))}</td>"
+            f"<td>{html.escape('; '.join(finding.evidence))}</td><td>{html.escape(_join(finding.related_identities))}</td><td>{html.escape(finding.why_it_matters)}</td><td>{html.escape(finding.remediation)}</td><td>{html.escape(_join(finding.control_hints))}</td><td>{html.escape(_join(finding.owasp_nhi_refs))}</td><td>{html.escape(_join(finding.ai_risk_refs))}</td>"
             "</tr>"
         )
-    return "\n".join(rows) or '<tr><td colspan="14">No findings found.</td></tr>'
+    return "\n".join(rows) or '<tr><td colspan="15">No findings found.</td></tr>'
+
+
+def _table_rows_risk_paths(scan: ScanResult) -> str:
+    rows = []
+    for path in scan.risk_paths:
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(path.attack_class)}</td><td>{html.escape(path.source)}</td><td>{html.escape(path.agent or '-')}</td>"
+            f"<td>{html.escape(path.tool or '-')}</td><td>{html.escape(path.credential or '-')}</td><td>{html.escape(path.sink)}</td>"
+            f"<td>{html.escape(path.trust_boundary)}</td><td>{html.escape('; '.join(path.evidence))}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows) or '<tr><td colspan="8">No AI action paths found.</td></tr>'
 
 
 def generate_html_report(scan: ScanResult, out_dir: str | Path | None = None) -> Path:
     out = _ensure_out(out_dir) / f"{scan.scan_id}.html"
     owasp_counts = Counter(ref for finding in scan.findings for ref in finding.owasp_nhi_refs)
+    ai_counts = Counter(ref for finding in scan.findings for ref in finding.ai_risk_refs)
     themes = Counter(f.category for f in scan.findings).most_common(5)
     blast = {
         "Code access": any("github" in (i.provider or "").lower() or "source-code" == i.data_access_level for i in scan.identities),
@@ -167,9 +187,11 @@ footer {{ color:#52616a; font-size:12px; margin-top:34px; border-top:1px solid #
 <div class="card">Critical<strong>{sum(1 for f in scan.findings if f.severity == 'critical')}</strong></div><div class="card">Trust<strong>{html.escape(scan.scan_trust_level)}</strong></div></div>
 <p><strong>Main risk themes:</strong> {html.escape(', '.join(f'{name} ({count})' for name, count in themes) or 'None')}</p></section>
 <section><h2>Developer Summary</h2><p>Fix critical and high issues first, especially exposed secrets, broad CI/CD permissions, admin cloud policies, unsafe MCP connectors, and AI agents with unapproved tools. Medium and low issues can follow as governance hardening.</p></section>
-<section><h2>NHI Inventory</h2><table><thead><tr><th>Type</th><th>Source</th><th>Name</th><th>Provider</th><th>Environment</th><th>Owner</th><th>Source Location</th><th>Permissions / Scopes / Tools</th><th>Risk Indicators</th></tr></thead><tbody>{_table_rows_identities(scan.identities)}</tbody></table></section>
-<section><h2>Findings</h2><table><thead><tr><th>Severity</th><th>Score</th><th>Confidence</th><th>Baseline</th><th>Rule ID</th><th>Category</th><th>File</th><th>Line</th><th>Evidence</th><th>Related</th><th>Why It Matters</th><th>Remediation</th><th>Controls</th><th>OWASP</th></tr></thead><tbody>{_table_rows_findings(scan.findings)}</tbody></table></section>
+<section><h2>NHI Inventory</h2><table><thead><tr><th>Type</th><th>Source</th><th>Name</th><th>Provider</th><th>Environment</th><th>Owner</th><th>Source Location</th><th>Permissions / Scopes / Tools</th><th>Risk Indicators</th><th>AI Refs</th></tr></thead><tbody>{_table_rows_identities(scan.identities)}</tbody></table></section>
+<section><h2>AI Action Paths</h2><table><thead><tr><th>Attack Class</th><th>Source</th><th>Agent</th><th>Tool</th><th>Credential</th><th>Sink</th><th>Trust Boundary</th><th>Evidence</th></tr></thead><tbody>{_table_rows_risk_paths(scan)}</tbody></table></section>
+<section><h2>Findings</h2><table><thead><tr><th>Severity</th><th>Score</th><th>Confidence</th><th>Baseline</th><th>Rule ID</th><th>Category</th><th>File</th><th>Line</th><th>Evidence</th><th>Related</th><th>Why It Matters</th><th>Remediation</th><th>Controls</th><th>OWASP</th><th>AI Refs</th></tr></thead><tbody>{_table_rows_findings(scan.findings)}</tbody></table></section>
 <section><h2>OWASP NHI Mapping</h2><table><thead><tr><th>Category</th><th>Count</th><th>Explanation</th></tr></thead><tbody>{''.join(f'<tr><td>{html.escape(ref)}</td><td>{count}</td><td>{html.escape(describe_ref(ref))}</td></tr>' for ref, count in sorted(owasp_counts.items())) or '<tr><td colspan="3">No mapped findings.</td></tr>'}</tbody></table></section>
+<section><h2>AI Risk Mapping</h2><table><thead><tr><th>Reference</th><th>Count</th><th>Explanation</th></tr></thead><tbody>{''.join(f'<tr><td>{html.escape(ref)}</td><td>{count}</td><td>{html.escape(describe_ai_ref(ref))}</td></tr>' for ref, count in sorted(ai_counts.items())) or '<tr><td colspan="3">No mapped findings.</td></tr>'}</tbody></table></section>
 <section><h2>Blast-Radius View</h2><table><tbody>{''.join(f'<tr><th>{html.escape(name)}</th><td>{"Present" if present else "Not observed"}</td></tr>' for name, present in blast.items())}</tbody></table></section>
 <section><h2>30-Day Remediation Plan</h2><ol><li><strong>Day 0-3:</strong> rotate exposed critical secrets and remove write-all/admin paths.</li><li><strong>Day 4-10:</strong> revoke, rotate, and re-scope OAuth, GitHub, cloud, Docker, Kubernetes, and webhook identities.</li><li><strong>Day 11-20:</strong> harden CI/CD and cloud deployments.</li><li><strong>Day 21-30:</strong> assign owners, document rotation, enable logging, and add approval gates.</li></ol></section>
 <section><h2>Evidence Appendix</h2><p>All evidence is masked. Full secrets are never displayed, validated, or used.</p></section>

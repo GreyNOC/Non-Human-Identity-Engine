@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from greynoc_nhi.advanced import synthesize_advanced_signals
+from greynoc_nhi.advanced import derive_risk_paths, synthesize_advanced_signals
 from greynoc_nhi.baseline import apply_baseline
 from greynoc_nhi.confidence import normalize_confidence
 from greynoc_nhi.custom_rules import custom_rule_templates
@@ -214,6 +214,9 @@ def normalize_signal(signal: dict) -> NonHumanIdentity:
         approval_required=normalize_bool(signal.get("approval_required"), None),
         context_store=_safe_text(signal.get("context_store"), secret_value),
         memory_enabled=normalize_bool(signal.get("memory_enabled"), None),
+        ai_risk_refs=normalize_string_list(signal.get("ai_risk_refs")),
+        ai_attack_class=_safe_text(signal.get("ai_attack_class")),
+        attack_chain_stage=_safe_text(signal.get("attack_chain_stage")),
         evidence=_safe_evidence(signal.get("evidence", []), secret_value),
         raw_reference=_safe_text(signal.get("raw_reference"), secret_value),
         tags=tags,
@@ -282,6 +285,12 @@ class Engine:
                 findings = run_rules(identities, custom_rule_templates(raw.get("custom_rules", [])))
             except Exception as exc:
                 fatal_errors.append(f"rule evaluation failure: {redact_inline_secret(str(exc))}")
+        risk_paths = []
+        if not fatal_errors:
+            try:
+                risk_paths = derive_risk_paths(identities, raw)
+            except Exception as exc:
+                fatal_errors.append(f"risk path derivation failure: {redact_inline_secret(str(exc))}")
 
         parser_errors = [
             {key: redact_inline_secret(value) for key, value in error.items()}
@@ -318,6 +327,7 @@ class Engine:
             completed_at=completed,
             identities=identities,
             findings=findings,
+            risk_paths=risk_paths,
             overall_score=overall,
             summary=summary,
             stats={
@@ -326,6 +336,7 @@ class Engine:
                 "parser_errors": parser_errors,
                 "normalization_errors": normalization_errors,
                 "advanced_correlations": len(advanced_signals),
+                "risk_paths": len(risk_paths),
                 "custom_rules_loaded": len(raw.get("custom_rules", [])),
                 "severity_label": severity_label(overall),
                 "critical_findings": critical,

@@ -12,8 +12,32 @@ from pathlib import Path
 from typing import Any
 
 from greynoc_nhi.masking import redact_inline_secret
-from greynoc_nhi.models import NonHumanIdentity
+from greynoc_nhi.models import NonHumanIdentity, RiskPath
 from greynoc_nhi.parsers.base import make_signal
+from greynoc_nhi.utils import stable_id
+
+PRIVILEGED_SINKS = {
+    "shell",
+    "terminal",
+    "exec",
+    "filesystem",
+    "write",
+    "github",
+    "email",
+    "database",
+    "deployment",
+    "deploy",
+    "browser",
+    "payment",
+    "refund",
+    "docker",
+    "kubernetes",
+    "terraform",
+    "aws",
+    "azure",
+    "gcp",
+}
+UNTRUSTED_CONTEXT_TAGS = {"untrusted_context", "prompt_artifact", "rag", "external_content", "tool_poisoning", "poisoning_surface"}
 
 
 def _signal(
@@ -33,6 +57,8 @@ def _signal(
     external_access: bool = False,
     data_access_level: str = "unknown",
     approval_required: bool | None = None,
+    ai_attack_class: str | None = None,
+    attack_chain_stage: str | None = None,
 ) -> dict[str, Any]:
     return make_signal(
         rule_id=rule_id,
@@ -52,7 +78,66 @@ def _signal(
         external_access=external_access,
         data_access_level=data_access_level,
         approval_required=approval_required,
+        ai_attack_class=ai_attack_class,
+        attack_chain_stage=attack_chain_stage,
     )
+
+
+def _has_any_tag(identity: NonHumanIdentity, tags: set[str]) -> bool:
+    return bool(set(identity.tags) & tags)
+
+
+def _privileged_tools(identity: NonHumanIdentity) -> set[str]:
+    terms = {item.lower() for item in [*identity.tools, *identity.permissions, *identity.scopes, *identity.tool_permissions]}
+    return {tool for tool in PRIVILEGED_SINKS if any(tool in term for term in terms)}
+
+
+def derive_risk_paths(identities: list[NonHumanIdentity], scan_raw: dict[str, Any]) -> list[RiskPath]:
+    """Build premium-report action paths from normalized identities."""
+    project_path = scan_raw["project_path"]
+    paths: list[RiskPath] = []
+    untrusted_sources = [item for item in identities if _has_any_tag(item, UNTRUSTED_CONTEXT_TAGS) or item.attack_chain_stage == "untrusted input"]
+    agents = [
+        item
+        for item in identities
+        if item.identity_type in {"ai_agent", "tool_connector", "mcp_server"}
+        and (_privileged_tools(item) or item.admin_access or item.external_access)
+    ]
+    credentials = [item for item in identities if item.has_secret or item.secret_fingerprint]
+
+    for source in untrusted_sources:
+        for agent in agents:
+            if source.id == agent.id:
+                continue
+            sinks = sorted(_privileged_tools(agent)) or (["admin"] if agent.admin_access else ["external"] if agent.external_access else [])
+            if not sinks:
+                continue
+            if agent.approval_required is True and not agent.admin_access:
+                continue
+            credential = next((item for item in credentials if item.file_path == agent.file_path or item.provider == agent.provider), None)
+            sink = sinks[0]
+            paths.append(
+                RiskPath(
+                    id=stable_id("riskpath", project_path, source.id, agent.id, sink, credential.id if credential else ""),
+                    source=source.name,
+                    agent=agent.name,
+                    tool=sink,
+                    credential=credential.name if credential else None,
+                    sink=sink,
+                    trust_boundary="untrusted context to privileged tool",
+                    attack_class=source.ai_attack_class or agent.ai_attack_class or "toxic flow",
+                    evidence=[
+                        f"{source.name} provides untrusted context from {Path(source.file_path or project_path).name}.",
+                        f"{agent.name} exposes privileged sink '{sink}' without a required approval gate.",
+                    ],
+                    related_identities=[source.id, agent.id, *([credential.id] if credential else [])],
+                )
+            )
+            break
+        if len(paths) >= 10:
+            break
+
+    return paths
 
 
 def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -124,6 +209,37 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
                 data_access_level="source-code",
                 approval_required=False,
                 tags=["ai_agent", "mcp", "privilege_bridge"],
+            )
+        )
+
+    untrusted_sources = [item for item in identities if _has_any_tag(item, UNTRUSTED_CONTEXT_TAGS) or item.attack_chain_stage == "untrusted input"]
+    privileged_agents = [
+        item
+        for item in identities
+        if item.identity_type in {"ai_agent", "tool_connector", "mcp_server"}
+        and item.approval_required is not True
+        and (_privileged_tools(item) or item.admin_access)
+    ]
+    if untrusted_sources and privileged_agents:
+        source = untrusted_sources[0]
+        agent = privileged_agents[0]
+        tools = sorted(_privileged_tools(agent)) or sorted(agent.tools)
+        signals.append(
+            _signal(
+                rule_id="nhi_ai_toxic_flow_untrusted_context_to_privileged_tool",
+                project_path=project_path,
+                name="Untrusted AI context to privileged tool",
+                identity_type="AI agent tool connector",
+                evidence=f"Untrusted context from {Path(source.file_path or project_path).name} can influence {agent.name}, which exposes privileged tools: {', '.join(tools) or 'admin-equivalent'}.",
+                tools=tools,
+                admin_access=True,
+                external_access=agent.external_access,
+                data_access_level=agent.data_access_level,
+                approval_required=False,
+                related_identities=[source.id, agent.id],
+                tags=["ai_agent", "toxic_flow", "untrusted_context", "privileged_sink"],
+                ai_attack_class="toxic flow",
+                attack_chain_stage="prompt/context",
             )
         )
 

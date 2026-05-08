@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from greynoc_nhi.ai_mapping import map_rule_to_ai_risk
 from greynoc_nhi.models import Finding, NonHumanIdentity
 from greynoc_nhi.owasp_mapping import map_rule_to_owasp
 from greynoc_nhi.scoring import finding_severity
@@ -86,6 +87,43 @@ RULE_CATALOG: dict[str, RuleTemplate] = {
     "nhi_production_ai_key_in_env": RuleTemplate("nhi_production_ai_key_in_env", "Production AI/API key in environment file", 90, "AI service access", "A production AI or API key appears in an environment file.", "Production provider keys can create spend, expose prompt workflows, and grant access to model gateways or data integrations.", "Rotate this token, move it into a secret manager, and replace it with short-lived workload identity where supported.", ["AI key custody", "secret storage"]),
     "nhi_long_lived_unowned_credential": RuleTemplate("nhi_long_lived_unowned_credential", "Long-lived credential has no owner or expiry", 75, "governance", "A credential-bearing identity lacks owner and expiry metadata.", "Long-lived unowned credentials are hard to rotate, revoke, or investigate during incidents.", "Add owner, business purpose, expiry, review date, and revocation instructions; rotate if the owner is unknown.", ["ownership", "expiry", "rotation"]),
     "nhi_shared_target_exposure": RuleTemplate("nhi_shared_target_exposure", "Multiple NHIs touch the same sensitive target", 80, "blast radius", "Multiple non-human identities appear to touch the same repository, cloud, or data target.", "Shared targets increase blast radius because one weak identity can expose or alter assets used by another.", "Separate identities by target and role, reduce shared write access, and review target-level logging.", ["blast-radius reduction", "least privilege"]),
+    "nhi_prompt_artifact_prompt_injection": RuleTemplate("nhi_prompt_artifact_prompt_injection", "Prompt artifact contains injection instructions", 80, "AI prompt security", "A prompt, agent instruction, skill, or documentation artifact contains text that attempts to override instructions.", "Indirect prompt injection can hide in files that agents retrieve or summarize, then steer tool use or data disclosure.", "Remove the instruction, treat external content as untrusted context, and add prompt isolation and tool approval gates.", ["prompt isolation", "content provenance", "approval gates"]),
+    "nhi_prompt_artifact_system_prompt_leakage": RuleTemplate("nhi_prompt_artifact_system_prompt_leakage", "Prompt artifact requests system prompt disclosure", 85, "AI prompt security", "A prompt artifact asks the model or agent to reveal hidden system or developer instructions.", "System prompt leakage exposes guardrails, internal workflow details, and instructions attackers can use to bypass controls.", "Delete the disclosure request and add output filters that refuse system, developer, and hidden instruction exposure.", ["system prompt protection", "output policy"]),
+    "nhi_prompt_artifact_sensitive_disclosure": RuleTemplate("nhi_prompt_artifact_sensitive_disclosure", "Prompt artifact requests secret or environment disclosure", 90, "AI data exposure", "A prompt artifact asks an agent to print environment variables, credentials, or exfiltrate secrets.", "Agents with file, shell, or memory access can turn these instructions into credential exposure.", "Remove the instruction, deny secret-retrieval requests in policy, and require approval before environment or file reads.", ["secret minimization", "tool approval"]),
+    "nhi_prompt_artifact_excessive_agency": RuleTemplate("nhi_prompt_artifact_excessive_agency", "Prompt artifact grants excessive tool agency", 85, "AI agent access", "A prompt artifact instructs an agent to call tools, shell, or external systems without asking.", "Excessive autonomy lets prompt content trigger actions that should require human review.", "Require explicit approval for shell, write, send, deploy, database, cloud, and GitHub actions.", ["approval gates", "least privilege"]),
+    "nhi_prompt_artifact_hidden_instruction": RuleTemplate("nhi_prompt_artifact_hidden_instruction", "Hidden prompt instruction detected", 75, "AI prompt security", "HTML, Markdown, or comment-hidden instructions were found in prompt-adjacent content.", "Hidden instructions can be invisible to reviewers but still land in retrieved context for an agent.", "Remove hidden instructions and render or ingest external content through a sanitizer that strips hidden text.", ["content sanitization", "RAG hygiene"]),
+    "nhi_prompt_contains_secret_or_credential": RuleTemplate("nhi_prompt_contains_secret_or_credential", "Prompt artifact contains credential-like text", 75, "AI data exposure", "A prompt or instruction file appears to contain a credential-like value.", "Prompts are often logged, shared, cached, or sent to model gateways, making embedded credentials high-risk.", "Rotate the value if real and keep credentials out of prompts and documentation.", ["secret scanning", "prompt hygiene"]),
+    "nhi_mcp_unpinned_remote_server": RuleTemplate("nhi_mcp_unpinned_remote_server", "MCP server source is remote or unpinned", 80, "MCP supply chain", "An MCP server is launched from a remote package, GitHub URL, or floating source without a strong pin.", "Unpinned MCP servers can change behavior and inherit local tool and secret access.", "Pin packages to exact versions or commits and review updates intentionally.", ["supply chain pinning", "MCP review"]),
+    "nhi_mcp_package_install_without_pinning": RuleTemplate("nhi_mcp_package_install_without_pinning", "MCP command installs package without version or hash pinning", 80, "MCP supply chain", "An MCP command uses a package manager without an exact version, commit, or digest pin.", "Package-manager launched servers create hidden execution paths inside agent workflows.", "Pin package versions, use hashes where supported, and prefer reviewed local wrappers.", ["package pinning", "MCP sandboxing"]),
+    "nhi_mcp_remote_script_execution": RuleTemplate("nhi_mcp_remote_script_execution", "MCP config executes a remote script", 95, "MCP supply chain", "An MCP server command appears to run a remote script or curl-piped shell.", "Remote script execution can give unreviewed code access to files, environment variables, and tools.", "Replace remote scripts with pinned, reviewed packages and run untrusted MCP configs only in a sandbox.", ["remote script ban", "sandboxing"]),
+    "nhi_mcp_writable_local_server_path": RuleTemplate("nhi_mcp_writable_local_server_path", "MCP server launches from writable local path", 80, "MCP supply chain", "An MCP server is launched from a relative, workspace, temp, or user-writable path.", "Writable server paths let local edits or malicious dependencies alter tools exposed to agents.", "Move MCP servers to reviewed immutable paths and restrict write access.", ["path hardening", "MCP review"]),
+    "nhi_mcp_env_secret_passthrough": RuleTemplate("nhi_mcp_env_secret_passthrough", "MCP server receives secret-bearing environment variables", 85, "MCP secret exposure", "MCP configuration passes tokens, keys, or secrets into a tool process.", "Tool processes can leak environment secrets through prompts, logs, subprocesses, or network calls.", "Pass only scoped, short-lived secrets and avoid broad environment inheritance.", ["secret minimization", "process isolation"]),
+    "nhi_mcp_unsafe_runtime_flag": RuleTemplate("nhi_mcp_unsafe_runtime_flag", "MCP server uses unsafe runtime flags", 85, "MCP runtime safety", "An MCP command includes unsafe, no-sandbox, allow-all, or dangerously named flags.", "Unsafe runtime flags expand the blast radius of agent tool calls and supply-chain compromise.", "Remove unsafe flags and replace them with explicit allowlists.", ["runtime hardening", "allowlists"]),
+    "nhi_mcp_toxic_tool_combination": RuleTemplate("nhi_mcp_toxic_tool_combination", "MCP server combines filesystem, execution, and network tools", 95, "MCP toxic flow", "MCP tool configuration combines local file access, command execution, and external network-capable tools.", "This combination can move secrets from local context to external systems through agent-directed tool calls.", "Split tools by trust boundary, disable unused tools, and require approval for execution or outbound actions.", ["tool segmentation", "approval gates"]),
+    "nhi_ai_tool_prompt_injection_description": RuleTemplate("nhi_ai_tool_prompt_injection_description", "Tool description contains prompt-injection behavior", 90, "AI tool poisoning", "A tool name or description instructs the model to ignore policy, reveal context, or leak prior messages.", "Agents often trust tool descriptions as instructions, so poisoned descriptions can steer model behavior.", "Review and sanitize tool metadata, and keep third-party tool descriptions outside the trusted instruction channel.", ["tool metadata review", "prompt isolation"]),
+    "nhi_ai_tool_shadowing": RuleTemplate("nhi_ai_tool_shadowing", "Potential tool shadowing detected", 75, "AI tool supply chain", "Two or more tools have overlapping or duplicate names, with at least one appearing third-party or remote.", "Tool shadowing can trick agents or operators into choosing a less trusted implementation.", "Rename tools with clear provenance and require allowlists for third-party tools.", ["tool allowlists", "provenance"]),
+    "nhi_ai_tool_name_description_mismatch": RuleTemplate("nhi_ai_tool_name_description_mismatch", "Tool name understates risky capability", 80, "AI tool governance", "A harmless-looking tool name has a description that indicates shell, write, deploy, send, or destructive capability.", "Misleading tool metadata makes it harder to reason about what an autonomous agent can do.", "Rename the tool, split dangerous actions, and require explicit approval for sensitive sinks.", ["tool naming", "approval gates"]),
+    "nhi_ai_tool_untrusted_remote_source": RuleTemplate("nhi_ai_tool_untrusted_remote_source", "Tool source is remote or third-party", 70, "AI tool supply chain", "A tool definition references a remote URL, marketplace, package, or third-party source.", "Remote tool sources can change outside local code review while retaining agent permissions.", "Pin remote tool versions and document trusted publishers.", ["supply chain review", "tool provenance"]),
+    "nhi_ai_tool_sensitive_sink": RuleTemplate("nhi_ai_tool_sensitive_sink", "Tool can write to a sensitive sink", 85, "AI tool governance", "A tool description or permission indicates write, send, deploy, database, cloud, or repository actions.", "Sensitive sinks need approval because a prompt can otherwise become a real-world action.", "Require schema validation, scoped credentials, logging, and human approval for sensitive writes.", ["approval gates", "audit logging"]),
+    "nhi_ai_toxic_flow_untrusted_context_to_privileged_tool": RuleTemplate("nhi_ai_toxic_flow_untrusted_context_to_privileged_tool", "Untrusted AI context can reach a privileged tool", 95, "AI toxic flow", "Untrusted context, prompt artifacts, RAG content, or external messages can influence an agent with privileged tools.", "This is the classic prompt-injection action path: untrusted input reaches a model that can execute, write, send, deploy, or query sensitive systems.", "Add context isolation, retrieval provenance, policy checks, and approval gates before privileged tool calls.", ["toxic flow review", "approval gates", "context isolation"]),
+    "nhi_rag_untrusted_source_ingestion": RuleTemplate("nhi_rag_untrusted_source_ingestion", "RAG pipeline ingests untrusted external sources", 75, "RAG security", "A RAG flow ingests web, issue, Slack, email, drive, PDF, or other external content.", "External documents can carry indirect prompt injection or poisoned facts into retrieved context.", "Track source provenance, allowlist ingestion sources, and sanitize retrieved content before prompting.", ["RAG provenance", "allowlists"]),
+    "nhi_rag_no_access_filter": RuleTemplate("nhi_rag_no_access_filter", "RAG retrieval lacks visible access filters", 80, "RAG authorization", "A RAG/vector configuration was found without tenant, owner, metadata, or document access filters.", "Missing filters can leak documents across users, teams, or tenants.", "Add tenant/user filters and enforce ownership checks at retrieval time.", ["tenant filters", "document ACLs"]),
+    "nhi_rag_context_to_tool_bridge": RuleTemplate("nhi_rag_context_to_tool_bridge", "RAG context feeds agent with privileged tools", 90, "RAG-to-tool bridge", "Retrieved documents appear connected to an agent that can use shell, GitHub, email, database, cloud, or deployment tools.", "Poisoned retrieved context can influence privileged actions if it is mixed into tool-using prompts.", "Separate retrieved context from tool instructions and require approval before privileged actions.", ["context isolation", "tool approval"]),
+    "nhi_vector_store_cross_tenant_risk": RuleTemplate("nhi_vector_store_cross_tenant_risk", "Vector store may expose cross-tenant data", 85, "RAG authorization", "A vector store appears to be shared or multi-tenant without explicit tenant filtering.", "Embedding stores can leak or retrieve another tenant's content when metadata filters are absent.", "Partition stores by tenant or enforce metadata filters on every query.", ["tenant isolation", "metadata filters"]),
+    "nhi_rag_poisoning_surface": RuleTemplate("nhi_rag_poisoning_surface", "RAG knowledge base has poisoning surface", 80, "RAG poisoning", "A writable or externally ingested knowledge base was detected.", "Writable knowledge bases can let attackers plant content that changes future model behavior.", "Restrict writers, review ingestion jobs, and add document provenance checks.", ["ingestion review", "provenance"]),
+    "nhi_llm_output_exec_sink": RuleTemplate("nhi_llm_output_exec_sink", "LLM output flows into code execution", 95, "improper output handling", "Model output appears to be passed to eval, exec, or equivalent code execution.", "Executing model output converts a text-generation issue into arbitrary code execution.", "Never execute raw model output; replace with structured schemas and deterministic handlers.", ["output validation", "code execution ban"]),
+    "nhi_llm_output_shell_sink": RuleTemplate("nhi_llm_output_shell_sink", "LLM output flows into shell execution", 95, "improper output handling", "Model output appears to build or execute a shell command.", "Prompt injection can become local command execution when model text reaches a shell.", "Use fixed command allowlists and human approval; do not concatenate model output into shell commands.", ["command allowlists", "approval gates"]),
+    "nhi_llm_output_sql_sink": RuleTemplate("nhi_llm_output_sql_sink", "LLM output flows into SQL execution", 85, "improper output handling", "Generated SQL appears to be executed without visible validation.", "Model-generated SQL can expose or modify data beyond the user's intent.", "Validate SQL against an allowlist, enforce read-only roles, and require approval for writes.", ["SQL allowlists", "least privilege"]),
+    "nhi_llm_output_html_sink": RuleTemplate("nhi_llm_output_html_sink", "LLM output rendered as HTML without sanitization", 80, "improper output handling", "Model output appears to be rendered as HTML or Markdown without a sanitizer.", "Unsafe rendering can turn generated text into script injection or misleading UI.", "Sanitize HTML/Markdown and render untrusted output in safe components.", ["output sanitization", "XSS protection"]),
+    "nhi_llm_function_call_without_schema": RuleTemplate("nhi_llm_function_call_without_schema", "LLM tool call lacks visible schema validation", 75, "AI tool governance", "Tool or function-call arguments from the model are accepted without visible schema validation.", "Unvalidated arguments can trigger unexpected tool actions or data access.", "Validate every tool call with a strict schema before execution.", ["schema validation", "tool policy"]),
+    "nhi_llm_autonomous_action_without_gate": RuleTemplate("nhi_llm_autonomous_action_without_gate", "Model output can trigger autonomous action without approval", 90, "AI agent access", "Model output appears to trigger merge, deploy, email, ticket, or other actions without a human gate.", "Autonomous actions combine improper output handling with excessive agency.", "Require explicit human approval and audit logging for external or state-changing actions.", ["approval gates", "audit logging"]),
+    "nhi_model_trust_remote_code": RuleTemplate("nhi_model_trust_remote_code", "Model load enables trust_remote_code", 90, "model supply chain", "A model load enables trust_remote_code.", "Remote model repositories can execute code at load time when this flag is enabled.", "Disable trust_remote_code unless the model repository is reviewed and pinned to an immutable revision.", ["model provenance", "code execution review"]),
+    "nhi_model_unpinned_revision": RuleTemplate("nhi_model_unpinned_revision", "Model pull lacks revision pinning", 70, "model supply chain", "A Hugging Face or model registry pull lacks an explicit revision, commit, or digest pin.", "Unpinned models can drift silently between development, CI, and production.", "Pin model revisions and document model update review.", ["model pinning", "change control"]),
+    "nhi_model_pickle_artifact": RuleTemplate("nhi_model_pickle_artifact", "Pickle or raw PyTorch model artifact detected", 75, "model supply chain", "A pickle, .pt, or .pth model artifact was found.", "Pickle-based model artifacts can execute code when loaded and are unsafe from untrusted sources.", "Prefer safe formats, verify provenance, and never load untrusted pickle artifacts.", ["artifact provenance", "safe model formats"]),
+    "nhi_model_gateway_unlogged_routing": RuleTemplate("nhi_model_gateway_unlogged_routing", "Model gateway routing lacks logging evidence", 70, "model gateway access", "A model gateway or provider router was detected without logging or audit settings.", "Unlogged routing makes prompt/data exposure and provider fallback behavior hard to investigate.", "Enable request/audit logging with redaction and retention controls.", ["AI gateway logging", "auditability"]),
+    "nhi_model_provider_fallback_without_policy": RuleTemplate("nhi_model_provider_fallback_without_policy", "Model provider fallback lacks policy evidence", 75, "model gateway access", "A model gateway appears to fall back across providers without visible policy controls.", "Provider fallback can silently move data to a different model, region, or retention policy.", "Define allowed providers, data classes, and fallback policy per environment.", ["provider policy", "data residency"]),
+    "nhi_model_container_unpinned_digest": RuleTemplate("nhi_model_container_unpinned_digest", "Model-serving container image is not digest-pinned", 70, "model supply chain", "A model-serving Docker image is referenced without a sha256 digest.", "Mutable container tags can change model server code or runtime behavior without review.", "Pin model-serving images by digest and review updates.", ["container pinning", "supply chain review"]),
+    "nhi_ai_provider_unbounded_consumption": RuleTemplate("nhi_ai_provider_unbounded_consumption", "AI provider key lacks budget or rate-limit evidence", 70, "AI spend control", "An AI provider key or gateway appears without visible rate, budget, timeout, or loop limits.", "Unbounded consumption can create denial-of-wallet risk and runaway agent loops.", "Set budgets, per-request limits, loop caps, timeouts, and alerting for AI provider usage.", ["spend controls", "rate limits"]),
 }
 
 SEVERITY_TO_SCORE = {"low": 30, "medium": 55, "high": 75, "critical": 90}
@@ -96,21 +134,23 @@ def make_finding(rule_id: str, identity: NonHumanIdentity, evidence: list[str] |
         template = RULE_CATALOG[rule_id]
     elif custom_templates and rule_id in custom_templates:
         custom = custom_templates[rule_id]
+        structural = custom.get("type") == "structural"
         template = RuleTemplate(
             rule_id=rule_id,
             title=custom.get("title", rule_id),
             base_score=SEVERITY_TO_SCORE.get(custom.get("severity", "medium"), 55),
             category="custom rule",
-            explanation="A custom local rule pack matched a secret-like value.",
-            why_it_matters="Custom rules let teams encode project-specific non-human identity risk patterns without using discovered credentials.",
+            explanation="A custom structural rule matched this identity." if structural else "A custom local rule pack matched a secret-like value.",
+            why_it_matters="Custom structural AI/NHI rules let teams encode project-specific risk conditions without changing engine code." if structural else "Custom rules let teams encode project-specific non-human identity risk patterns without using discovered credentials.",
             remediation=custom.get("remediation", "Review and remediate this custom rule match."),
-            control_hints=["custom rule pack", "rotation"],
+            control_hints=["custom structural rule"] if structural else ["custom rule pack", "rotation"],
         )
     else:
         return None  # type: ignore[return-value]
     score = min(100, template.base_score + score_boost)
     refs = map_rule_to_owasp(rule_id)
-    if custom_templates and rule_id in custom_templates and not refs:
+    ai_refs = sorted(set(identity.ai_risk_refs + map_rule_to_ai_risk(rule_id)))
+    if custom_templates and rule_id in custom_templates and not refs and custom_templates[rule_id].get("type") != "structural":
         refs = ["NHI2:2025"]
     return Finding(
         id=stable_id("finding", rule_id, identity.id, identity.file_path, identity.line_number, evidence or identity.evidence),
@@ -130,6 +170,7 @@ def make_finding(rule_id: str, identity: NonHumanIdentity, evidence: list[str] |
         remediation=template.remediation,
         priority="fix now" if score >= 80 else "next sprint" if score >= 60 else "planned hardening",
         owasp_nhi_refs=refs,
+        ai_risk_refs=ai_refs,
         control_hints=template.control_hints,
         created_at=utc_now(),
         confidence=identity.confidence,
@@ -150,6 +191,41 @@ def needs_identity_governance_finding(identity: NonHumanIdentity) -> bool:
         or bool(identity.tools)
         or identity.identity_type in {"ci_runner", "deployment_identity", "service_account", "mcp_server", "ai_agent", "tool_connector", "model_gateway"}
     )
+
+
+def _custom_structural_match(identity: NonHumanIdentity, when: dict) -> bool:
+    def lower_list(values: list[str]) -> list[str]:
+        return [str(value).lower() for value in values]
+
+    checks = {
+        "identity_type": identity.identity_type,
+        "provider": identity.provider,
+        "approval_required": identity.approval_required,
+        "has_secret": identity.has_secret,
+        "admin_access": identity.admin_access,
+        "production_access": identity.production_access,
+        "external_access": identity.external_access,
+        "data_access_level": identity.data_access_level,
+    }
+    for key, expected in checks.items():
+        if key in when and when[key] != expected:
+            return False
+    contains_checks = {
+        "tools_contains_any": lower_list(identity.tools),
+        "permissions_contains_any": lower_list(identity.permissions),
+        "scopes_contains_any": lower_list(identity.scopes),
+        "tags_contains_any": lower_list(identity.tags),
+        "data_classes_contains_any": lower_list(identity.data_classes),
+    }
+    for key, values in contains_checks.items():
+        if key not in when:
+            continue
+        expected_values = [str(item).lower() for item in when.get(key, [])]
+        if not any(any(expected in value for value in values) for expected in expected_values):
+            return False
+    if "identity_name_contains" in when and str(when["identity_name_contains"]).lower() not in identity.name.lower():
+        return False
+    return True
 
 
 def run_rules(identities: list[NonHumanIdentity], custom_templates: dict | None = None) -> list[Finding]:
@@ -173,6 +249,14 @@ def run_rules(identities: list[NonHumanIdentity], custom_templates: dict | None 
             if finding.id not in seen:
                 findings.append(finding)
                 seen.add(finding.id)
+        if custom_templates:
+            for rule_id, custom in custom_templates.items():
+                if custom.get("type") != "structural" or not _custom_structural_match(identity, custom.get("when", {})):
+                    continue
+                finding = make_finding(rule_id, identity, custom_templates=custom_templates)
+                if finding and finding.id not in seen:
+                    findings.append(finding)
+                    seen.add(finding.id)
         inferred_rules: list[str] = []
         if identity.identity_type == "ai_agent" and any(tool in {"filesystem", "read_file", "write_file"} for tool in identity.tools):
             inferred_rules.append("nhi_ai_agent_filesystem_access")

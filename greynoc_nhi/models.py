@@ -43,6 +43,9 @@ class NonHumanIdentity:
     approval_required: bool | None = None
     context_store: str | None = None
     memory_enabled: bool | None = None
+    ai_risk_refs: list[str] = field(default_factory=list)
+    ai_attack_class: str | None = None
+    attack_chain_stage: str | None = None
     evidence: list[str] = field(default_factory=list)
     raw_reference: str | None = None
     tags: list[str] = field(default_factory=list)
@@ -74,10 +77,28 @@ class Finding:
     owasp_nhi_refs: list[str]
     control_hints: list[str]
     created_at: str
+    ai_risk_refs: list[str] = field(default_factory=list)
     confidence: str = "medium"
     related_identities: list[str] = field(default_factory=list)
     baseline_status: str = "new"
     baseline_key: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class RiskPath:
+    id: str
+    source: str
+    agent: str | None
+    tool: str | None
+    credential: str | None
+    sink: str
+    trust_boundary: str
+    attack_class: str
+    evidence: list[str]
+    related_identities: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -94,6 +115,7 @@ class ScanResult:
     overall_score: int
     summary: str
     stats: dict[str, Any]
+    risk_paths: list[RiskPath] = field(default_factory=list)
     scan_trust_level: str = "clean"
     policy_decision: str = "pass"
     fatal_errors: list[str] = field(default_factory=list)
@@ -107,6 +129,7 @@ class ScanResult:
             "completed_at": self.completed_at,
             "identities": [identity.to_dict() for identity in self.identities],
             "findings": [finding.to_dict() for finding in self.findings],
+            "risk_paths": [risk_path.to_dict() for risk_path in self.risk_paths],
             "overall_score": self.overall_score,
             "summary": self.summary,
             "stats": self.stats,
