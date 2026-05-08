@@ -18,6 +18,7 @@ from greynoc_nhi.parsers.base import Signal, make_signal
 # ReDoS shape like `(a+)+$` (confirmed: ~88s on 30 chars in testing). Reject
 # anything that looks dangerous at load time rather than at scan time.
 _MAX_PATTERN_LENGTH = 512
+ALLOWED_SEVERITIES = {"low", "medium", "high", "critical"}
 _REDOS_SHAPES = re.compile(
     r"\([^)]*[+*][^)]*\)[+*?]"  # nested unbounded quantifier: (a+)+, (.*)*, (x+)?
     r"|"
@@ -71,6 +72,9 @@ def load_rule_pack(path: str | Path | None) -> list[CustomRule]:
         if not isinstance(rule, dict) or not rule.get("id"):
             continue
         rule_type = str(rule.get("type", "regex")).lower()
+        severity = str(rule.get("severity", "medium")).lower()
+        if severity not in ALLOWED_SEVERITIES:
+            continue
         pattern = str(rule["pattern"]) if rule.get("pattern") else None
         compiled = _safe_compile(pattern) if pattern else None
         when = rule.get("when", {}) if isinstance(rule.get("when", {}), dict) else {}
@@ -83,7 +87,7 @@ def load_rule_pack(path: str | Path | None) -> list[CustomRule]:
             CustomRule(
                 id=str(rule["id"]),
                 title=str(rule.get("title", rule["id"])),
-                severity=str(rule.get("severity", "medium")).lower(),
+                severity=severity,
                 type=rule_type,
                 pattern=pattern,
                 compiled=compiled,

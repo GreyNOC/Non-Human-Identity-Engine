@@ -15,6 +15,7 @@ def test_load_rule_pack_rejects_invalid_and_redos_patterns(tmp_path):
                     {"id": "safe", "pattern": r"GNOC_FAKE_SECRET_DO_NOT_USE_[A-Z0-9_]+", "title": "Safe"},
                     {"id": "redos", "pattern": r"(a+)+$"},
                     {"id": "invalid", "pattern": r"(["},
+                    {"id": "bad_severity", "pattern": r"GNOC_FAKE_SECRET_DO_NOT_USE_[A-Z0-9_]+", "severity": "urgent"},
                 ]
             }
         ),

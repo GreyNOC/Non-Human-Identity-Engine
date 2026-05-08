@@ -77,6 +77,19 @@ def test_dirty_repo_scan_id_changes_when_changes_change(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not _git_available(), reason="git binary not available")
+def test_dirty_repo_scan_id_changes_when_untracked_file_content_changes(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "tracked.txt").write_text("base\n", encoding="utf-8")
+    _commit(tmp_path, "init")
+    untracked = tmp_path / ".env"
+    untracked.write_text("OPENAI_API_KEY=GNOC_FAKE_SECRET_DO_NOT_USE_REPRO_A\n", encoding="utf-8")
+    a = compute_scan_id(str(tmp_path), "2025-01-01T00:00:00", 1, 1)
+    untracked.write_text("OPENAI_API_KEY=GNOC_FAKE_SECRET_DO_NOT_USE_REPRO_B\n", encoding="utf-8")
+    b = compute_scan_id(str(tmp_path), "2025-01-01T00:00:00", 1, 1)
+    assert a != b
+
+
+@pytest.mark.skipif(not _git_available(), reason="git binary not available")
 def test_engine_persists_same_scan_id_across_clean_runs(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     (tmp_path / ".env").write_text("OPENAI_API_KEY=GNOC_FAKE_SECRET_DO_NOT_USE_REPRO_998877\n", encoding="utf-8")

@@ -32,6 +32,22 @@ def read_text_safely(path: Path) -> str | None:
         return None
 
 
+def chmod_private_file(path: Path) -> None:
+    """Best-effort owner-only permissions for local sensitive artifacts."""
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def chmod_private_dir(path: Path) -> None:
+    """Best-effort owner-only directory permissions for local scan artifacts."""
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
+
+
 def parse_json_safely(text: str) -> Any | None:
     try:
         return json.loads(text)
