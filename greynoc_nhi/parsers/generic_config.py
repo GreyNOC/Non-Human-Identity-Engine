@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
@@ -46,10 +48,8 @@ _LINE_KV_RE = re.compile(
     re.I,
 )
 
-
 def should_parse(path: Path) -> bool:
     return path.suffix.lower() in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".py", ".js", ".ts"}
-
 
 def _rule_for(key: str, value: str) -> str:
     lower = key.lower()
@@ -64,7 +64,6 @@ def _rule_for(key: str, value: str) -> str:
     if "password" in lower and "://" in value:
         return "nhi_database_url_with_credentials"
     return "nhi_hardcoded_secret"
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []

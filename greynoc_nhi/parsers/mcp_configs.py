@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
@@ -44,7 +46,6 @@ MCP_TOOL_CAPABILITIES = {
 EXECUTING_COMMANDS = {"python", "node", "npx", "uvx", "docker", "bash", "sh", "powershell", "cmd.exe"}
 HIGH_RISK_TOOLS = {"shell", "terminal", "filesystem", "browser", "email", "gdrive", "github", "database", "docker", "kubernetes", "terraform", "aws", "azure", "gcp"}
 
-
 def should_parse(path: Path) -> bool:
     normalized = str(path).replace("\\", "/").lower()
     return (
@@ -55,7 +56,6 @@ def should_parse(path: Path) -> bool:
         or normalized.endswith("/.continue/mcp.json")
         or normalized.endswith("/.windsurf/mcp.json")
     )
-
 
 def _capabilities(text: str) -> set[str]:
     lowered = text.lower()
@@ -69,7 +69,6 @@ def _capabilities(text: str) -> set[str]:
         tools.add("shell")
     return tools
 
-
 def _executing_commands(rows: list[tuple[str, object]]) -> set[str]:
     commands = set()
     for key, value in rows:
@@ -79,7 +78,6 @@ def _executing_commands(rows: list[tuple[str, object]]) -> set[str]:
             if token in EXECUTING_COMMANDS:
                 commands.add(token)
     return commands
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     data = parse_json_safely(text)

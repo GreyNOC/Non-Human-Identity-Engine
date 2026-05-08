@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -14,6 +17,37 @@ from greynoc_nhi.engine import Engine
 from greynoc_nhi.reports import generate_html_report, generate_json_report, generate_markdown_report
 from greynoc_nhi.sample_data import sample_project_path
 from greynoc_nhi.scoring import severity_label
+
+
+def open_path_in_file_manager(path: str | Path) -> bool:
+    """Open `path` in the platform-native file manager. Returns True on success."""
+    target = str(Path(path))
+    if sys.platform.startswith("win"):
+        try:
+            os.startfile(target)  # type: ignore[attr-defined]
+            return True
+        except (AttributeError, OSError):
+            return False
+    if sys.platform == "darwin":
+        opener = shutil.which("open")
+        if not opener:
+            return False
+        try:
+            subprocess.Popen([opener, target])
+            return True
+        except OSError:
+            return False
+    opener = shutil.which("xdg-open") or shutil.which("gio")
+    if not opener:
+        return False
+    try:
+        if opener.endswith("gio"):
+            subprocess.Popen([opener, "open", target])
+        else:
+            subprocess.Popen([opener, target])
+        return True
+    except OSError:
+        return False
 
 
 class PixelClusterIndicator(tk.Canvas):
@@ -231,8 +265,11 @@ class GreyNOCApp(tk.Tk):
     def open_reports_folder(self) -> None:
         DEFAULT_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
         try:
-            os.startfile(DEFAULT_REPORTS_DIR)  # type: ignore[attr-defined]
-        except AttributeError:
+            opened = open_path_in_file_manager(DEFAULT_REPORTS_DIR)
+        except OSError as exc:
+            messagebox.showinfo("Reports folder", f"{DEFAULT_REPORTS_DIR}\n\n({exc})")
+            return
+        if not opened:
             messagebox.showinfo("Reports folder", str(DEFAULT_REPORTS_DIR))
 
     def show_first_run_help(self) -> None:

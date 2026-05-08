@@ -5,8 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from greynoc_nhi.cache import ParserCache, content_hash, parser_version_string, rewrite_file_path
 from greynoc_nhi.constants import IGNORED_DIRS, MAX_FILE_BYTES, SCAN_EXTENSIONS, SCAN_FILE_NAMES
 from greynoc_nhi.custom_rules import CustomRule, load_rule_pack, scan_custom_rules
+from greynoc_nhi.git_history import (
+    commit_signal_fields,
+    history_evidence_line,
+    is_git_repository,
+    iter_history_changes,
+    remap_line_number,
+)
 from greynoc_nhi.ignore import is_ignored, load_greynocignore
 from greynoc_nhi.masking import redact_inline_secret
 from greynoc_nhi.parsers import PARSERS
@@ -16,7 +24,30 @@ from greynoc_nhi.utils import read_text_safely
 def should_scan_file(path: Path) -> bool:
     """Return True when a file is small and relevant enough to scan."""
     name = path.name.lower()
-    if name in SCAN_FILE_NAMES or path.suffix.lower() in SCAN_EXTENSIONS or name.startswith(".env"):
+    normalized = str(path).replace("\\", "/").lower()
+    pulumi_stack = (
+        name.startswith("pulumi.")
+        and (name.endswith(".yaml") or name.endswith(".yml"))
+    )
+    package_cred_path = (
+        normalized.endswith(".cargo/credentials")
+        or normalized.endswith(".cargo/credentials.toml")
+        or normalized.endswith(".cargo/config.toml")
+        or normalized.endswith(".cargo/config")
+        or normalized.endswith(".gradle/init.gradle")
+        or normalized.endswith(".gradle/gradle.properties")
+    )
+    package_cred_name = name in {".npmrc", ".pypirc", ".netrc", "gradle.properties"}
+    if (
+        name in SCAN_FILE_NAMES
+        or path.suffix.lower() in SCAN_EXTENSIONS
+        or name.startswith(".env")
+        or name.endswith(".tfstate")
+        or name.endswith(".tfstate.backup")
+        or pulumi_stack
+        or package_cred_path
+        or package_cred_name
+    ):
         try:
             return path.stat().st_size <= MAX_FILE_BYTES
         except OSError:
@@ -95,11 +126,23 @@ def dedupe_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
 class Scanner:
     """Local recursive scanner."""
 
-    def __init__(self, ignored_dirs: set[str] | None = None, rule_pack_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        ignored_dirs: set[str] | None = None,
+        rule_pack_path: str | Path | None = None,
+        cache: ParserCache | None = None,
+    ) -> None:
         self.ignored_dirs = ignored_dirs or IGNORED_DIRS
         self.custom_rules: list[CustomRule] = load_rule_pack(rule_pack_path)
+        self.cache = cache
+        self._parser_version = parser_version_string(PARSERS)
 
-    def scan(self, project_path: str | Path) -> dict[str, Any]:
+    def scan(
+        self,
+        project_path: str | Path,
+        *,
+        only_paths: list[Path] | None = None,
+    ) -> dict[str, Any]:
         root = Path(project_path).resolve()
         signals: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
@@ -107,7 +150,13 @@ class Scanner:
         skipped_files = 0
         parser_cache: dict[tuple[str, str, str], list[Any]] = {}
         ignore_patterns = load_greynocignore(root)
-        for path in iter_scan_files(root, self.ignored_dirs, ignore_patterns):
+        candidates = iter_scan_files(root, self.ignored_dirs, ignore_patterns)
+        if only_paths is not None:
+            allowed = {p.resolve() for p in only_paths}
+            candidates = [p for p in candidates if p.resolve() in allowed]
+        cache_hits = 0
+        cache_misses = 0
+        for path in candidates:
             text = read_text_safely(path)
             if text is None:
                 skipped_files += 1
@@ -118,10 +167,94 @@ class Scanner:
             if parsers is None:
                 parsers = [parser for parser in PARSERS if parser.should_parse(path)]
                 parser_cache[cache_key] = parsers
-            for parser in parsers:
-                try:
-                    signals.extend(parser.parse(path, text))
-                except Exception as exc:  # Defensive parser isolation.
-                    errors.append({"file": str(path), "parser": parser.__name__, "error": redact_inline_secret(str(exc))})
+            file_signals: list[dict[str, Any]] = []
+            content_sha: str | None = None
+            cached_signals: list[dict[str, Any]] | None = None
+            if self.cache is not None and parsers:
+                content_sha = content_hash(text)
+                cached_signals = self.cache.get(content_sha, self._parser_version)
+            if cached_signals is not None:
+                file_signals.extend(rewrite_file_path(cached_signals, str(path)))
+                cache_hits += 1
+            else:
+                if parsers:
+                    cache_misses += 1
+                for parser in parsers:
+                    try:
+                        file_signals.extend(parser.parse(path, text))
+                    except Exception as exc:  # Defensive parser isolation.
+                        errors.append({"file": str(path), "parser": parser.__name__, "error": redact_inline_secret(str(exc))})
+                if self.cache is not None and content_sha is not None and parsers:
+                    self.cache.put(content_sha, self._parser_version, file_signals)
+            signals.extend(file_signals)
             signals.extend(scan_custom_rules(path, text, self.custom_rules))
-        return {"project_path": str(root), "signals": dedupe_signals(signals), "errors": errors, "scanned_files": scanned_files, "skipped_files": skipped_files, "ignore_patterns": ignore_patterns, "custom_rules": self.custom_rules}
+        return {
+            "project_path": str(root),
+            "signals": dedupe_signals(signals),
+            "errors": errors,
+            "scanned_files": scanned_files,
+            "skipped_files": skipped_files,
+            "ignore_patterns": ignore_patterns,
+            "custom_rules": self.custom_rules,
+            "cache_hits": cache_hits,
+            "cache_misses": cache_misses,
+        }
+
+    def scan_history(
+        self,
+        project_path: str | Path,
+        *,
+        max_commits: int | None = 1000,
+        since: str | None = None,
+    ) -> dict[str, Any]:
+        """Scan a repository's git history for secrets in past commits."""
+        root = Path(project_path).resolve()
+        signals: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        commits_seen: set[str] = set()
+        if not is_git_repository(root):
+            return {
+                "project_path": str(root),
+                "signals": [],
+                "errors": [{"file": str(root), "parser": "git_history", "error": "not a git repository"}],
+                "commits_scanned": 0,
+            }
+        try:
+            changes = list(iter_history_changes(root, max_commits=max_commits, since=since))
+        except Exception as exc:
+            return {
+                "project_path": str(root),
+                "signals": [],
+                "errors": [{"file": str(root), "parser": "git_history", "error": redact_inline_secret(str(exc))}],
+                "commits_scanned": 0,
+            }
+        for change in changes:
+            commits_seen.add(change.commit.sha)
+            synthetic_path = root / change.file_path
+            for parser in PARSERS:
+                try:
+                    if not parser.should_parse(synthetic_path):
+                        continue
+                    raw_signals = parser.parse(synthetic_path, change.synthetic_text)
+                except Exception as exc:
+                    errors.append({
+                        "file": change.file_path,
+                        "parser": parser.__name__,
+                        "error": redact_inline_secret(str(exc)),
+                        "commit": change.commit.short_sha,
+                    })
+                    continue
+                for sig in raw_signals:
+                    remapped = remap_line_number(change.line_map, sig.get("line_number"))
+                    if remapped is not None:
+                        sig["line_number"] = remapped
+                    sig.update(commit_signal_fields(change.commit))
+                    sig["tags"] = list(sig.get("tags", [])) + ["git_history"]
+                    sig["evidence"] = list(sig.get("evidence", [])) + [history_evidence_line(change.commit)]
+                    signals.append(sig)
+        return {
+            "project_path": str(root),
+            "signals": dedupe_signals(signals),
+            "errors": errors,
+            "commits_scanned": len(commits_seen),
+        }

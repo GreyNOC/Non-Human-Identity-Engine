@@ -51,6 +51,10 @@ class NonHumanIdentity:
     tags: list[str] = field(default_factory=list)
     related_identities: list[str] = field(default_factory=list)
     confidence: str = "medium"
+    commit_sha: str | None = None
+    commit_short_sha: str | None = None
+    commit_author: str | None = None
+    commit_date: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 from typing import Any
@@ -92,7 +94,6 @@ _AGENT_LINE_RE = re.compile(
 )
 _TOOL_BOUNDARY_RES = {tool: re.compile(rf"(?<![a-z0-9_-]){re.escape(tool)}(?![a-z0-9_-])") for tool in TOOL_CAPABILITIES}
 
-
 def should_parse(path: Path) -> bool:
     normalized = str(path).replace("\\", "/").lower()
     name = path.name.lower()
@@ -108,7 +109,6 @@ def should_parse(path: Path) -> bool:
         or path.suffix.lower() == ".py"
     )
 
-
 def _rows(path: Path, text: str) -> list[tuple[str, object, int | None]]:
     data = parse_json_safely(text)
     if data is not None:
@@ -122,7 +122,6 @@ def _rows(path: Path, text: str) -> list[tuple[str, object, int | None]]:
             rows.append((match.group(1), match.group(2).strip().strip("'\""), number))
     return rows
 
-
 def _capabilities_from_text(text: object) -> set[str]:
     lowered = str(text).lower()
     tools = set()
@@ -133,7 +132,6 @@ def _capabilities_from_text(text: object) -> set[str]:
         tools.add("gdrive")
     return tools
 
-
 def _frameworks_from_text(text: str) -> set[str]:
     lowered = text.lower()
     frameworks = set()
@@ -141,7 +139,6 @@ def _frameworks_from_text(text: str) -> set[str]:
         if marker in lowered:
             frameworks.add(provider)
     return frameworks
-
 
 def _extract_tool_specs(obj: Any, path: str = "") -> list[dict[str, str]]:
     specs: list[dict[str, str]] = []
@@ -198,7 +195,6 @@ def _tool_line(text: str, spec: dict[str, str]) -> int | None:
 def _is_model_gateway(path: Path, text: str) -> bool:
     lowered = text.lower()
     return path.name.lower() in MODEL_GATEWAY_NAMES or any(marker in lowered for marker in MODEL_GATEWAY_MARKERS)
-
 
 def parse(path: Path, text: str) -> list[Signal]:
     rows = _rows(path, text)
