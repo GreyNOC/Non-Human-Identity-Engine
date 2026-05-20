@@ -1,6 +1,9 @@
+# Repository ownership rules.
+# Specific paths remain listed below; the final wildcard keeps every other change owned by GreyNOC.
 /.github/workflows/ @GreyNOC
 /pyproject.toml @GreyNOC
 /greynoc_nhi/rules.py @GreyNOC
 /greynoc_nhi/parsers/ @GreyNOC
 /greynoc_nhi/engine.py @GreyNOC
 /greynoc_nhi/scanner.py @GreyNOC
+* @GreyNOC
