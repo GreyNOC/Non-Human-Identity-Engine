@@ -2,8 +2,32 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any
+
+_FIELD_NAMES: dict[type, tuple[str, ...]] = {}
+
+
+def _shallow_to_dict(instance: Any) -> dict[str, Any]:
+    """Shallow, order-preserving dict for flat dataclasses.
+
+    Matches dataclasses.asdict() output exactly for models whose fields are
+    all scalars or list[str], without asdict's recursive deep copy (which is
+    roughly an order of magnitude slower and runs in every serialization hot
+    path). If a nested dataclass or dict field is ever added to these models,
+    that field must be deep-copied here too (a parity test in
+    tests/test_storage.py locks the asdict equivalence).
+    """
+    cls = type(instance)
+    names = _FIELD_NAMES.get(cls)
+    if names is None:
+        names = tuple(f.name for f in fields(cls))
+        _FIELD_NAMES[cls] = names
+    out: dict[str, Any] = {}
+    for name in names:
+        value = getattr(instance, name)
+        out[name] = list(value) if isinstance(value, list) else value
+    return out
 
 
 @dataclass
@@ -57,7 +81,7 @@ class NonHumanIdentity:
     commit_date: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return _shallow_to_dict(self)
 
 
 @dataclass
@@ -88,7 +112,7 @@ class Finding:
     baseline_key: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return _shallow_to_dict(self)
 
 
 @dataclass
@@ -105,7 +129,7 @@ class RiskPath:
     related_identities: list[str]
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return _shallow_to_dict(self)
 
 
 @dataclass

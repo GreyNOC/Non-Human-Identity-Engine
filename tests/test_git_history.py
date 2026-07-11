@@ -131,6 +131,76 @@ def test_parse_git_log_handles_minimal_input() -> None:
     assert change.line_map == [1, 2]
 
 
+def test_parse_git_log_handles_unified_zero_output() -> None:
+    """-U0 output has no context lines; hunk headers alone must keep line numbers exact."""
+    sample = (
+        f"\n{COMMIT_DELIMITER}\n"
+        "abcdefabcdefabcdefabcdefabcdefabcdefabcd\tabcdefa\tBob\tbob@example.com\t2024-03-12T10:00:00+00:00\tAdd creds\n"
+        "diff --git a/config.txt b/config.txt\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/config.txt\n"
+        "+++ b/config.txt\n"
+        "@@ -0,0 +3 @@\n"
+        "+API_KEY=GNOC_FAKE_SECRET_DO_NOT_USE_U0_555666\n"
+        "@@ -9,0 +10,2 @@\n"
+        "+A=1\n"
+        "+B=2\n"
+    )
+    changes = parse_git_log(sample)
+    assert len(changes) == 1
+    assert changes[0].line_map == [3, 10, 11]
+
+
+def test_parse_git_log_decodes_quoted_non_ascii_paths() -> None:
+    sample = (
+        f"\n{COMMIT_DELIMITER}\n"
+        "abcdefabcdefabcdefabcdefabcdefabcdefabcd\tabcdefa\tBob\tbob@example.com\t2024-03-12T10:00:00+00:00\tAdd creds\n"
+        'diff --git "a/caf\\303\\251/.env" "b/caf\\303\\251/.env"\n'
+        "new file mode 100644\n"
+        "index 0000000..1234567\n"
+        "--- /dev/null\n"
+        '+++ "b/caf\\303\\251/.env"\n'
+        "@@ -0,0 +1 @@\n"
+        "+OPENAI_API_KEY=GNOC_FAKE_SECRET_DO_NOT_USE_QUOTED_777888\n"
+    )
+    changes = parse_git_log(sample)
+    assert len(changes) == 1
+    assert changes[0].file_path == "café/.env"
+    assert "OPENAI_API_KEY" in changes[0].synthetic_text
+
+
+def test_parse_git_log_strips_trailing_tab_for_paths_with_spaces() -> None:
+    sample = (
+        f"\n{COMMIT_DELIMITER}\n"
+        "abcdefabcdefabcdefabcdefabcdefabcdefabcd\tabcdefa\tBob\tbob@example.com\t2024-03-12T10:00:00+00:00\tAdd creds\n"
+        "diff --git a/my config.env b/my config.env\n"
+        "new file mode 100644\n"
+        "index 0000000..1234567\n"
+        "--- /dev/null\n"
+        "+++ b/my config.env\t\n"
+        "@@ -0,0 +1 @@\n"
+        "+API_KEY=GNOC_FAKE_SECRET_DO_NOT_USE_SPACES_999000\n"
+    )
+    changes = parse_git_log(sample)
+    assert len(changes) == 1
+    assert changes[0].file_path == "my config.env"
+
+
+def test_history_scan_finds_secret_in_non_ascii_path(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    subdir = tmp_path / "café"
+    subdir.mkdir()
+    (subdir / ".env").write_text(
+        "OPENAI_API_KEY=GNOC_FAKE_SECRET_DO_NOT_USE_UNICODE_121212\n",
+        encoding="utf-8",
+    )
+    _commit(tmp_path, "Add config in non-ascii dir")
+
+    raw = Scanner().scan_history(tmp_path)
+    files = {sig.get("file_path", "") for sig in raw["signals"]}
+    assert any("café" in f.replace("\\", "/") for f in files), files
+
+
 def test_iter_history_changes_works_end_to_end(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     (tmp_path / "config.txt").write_text("hello\n", encoding="utf-8")

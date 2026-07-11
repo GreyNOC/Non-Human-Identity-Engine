@@ -97,3 +97,22 @@ def test_exit_code_default_is_legacy_binary(tmp_path: Path) -> None:
     assert exit_code_for_baseline(scan, args) == 1
     args2 = SimpleNamespace(severity_exit_codes=False, fail_on_new=None)
     assert exit_code_for_baseline(scan, args2) == 0
+
+
+def test_untrusted_scan_fails_closed_under_fail_on_new() -> None:
+    """A fatally-errored scan (zero findings) must not exit 0 in gated mode."""
+    args = SimpleNamespace(severity_exit_codes=False, fail_on_new="high")
+    scan = _make_scan([], trust="untrusted")
+    assert exit_code_for_baseline(scan, args) == EXIT_UNTRUSTED
+
+
+def test_untrusted_scan_without_gating_flags_reports_only() -> None:
+    args = SimpleNamespace(severity_exit_codes=False, fail_on_new=None)
+    scan = _make_scan([], trust="untrusted")
+    assert exit_code_for_baseline(scan, args) == EXIT_CLEAN
+
+
+def test_untrusted_scan_with_severity_exit_codes_returns_ten() -> None:
+    args = SimpleNamespace(severity_exit_codes=True, fail_on_new=None)
+    scan = _make_scan([], trust="untrusted")
+    assert exit_code_for_baseline(scan, args) == EXIT_UNTRUSTED

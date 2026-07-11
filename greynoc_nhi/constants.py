@@ -24,6 +24,19 @@ IGNORED_DIRS = {
     ".cache",
     "target",
     "vendor",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".eggs",
+    "htmlcov",
+    "site-packages",
+    ".svn",
+    ".hg",
+    ".parcel-cache",
+    ".turbo",
+    "Pods",
+    "bower_components",
 }
 
 SCAN_FILE_NAMES = {
@@ -74,6 +87,18 @@ SCAN_FILE_NAMES = {
     "common-auth",
     "system-auth",
     "password-auth",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    ".pgpass",
+    ".my.cnf",
+    ".s3cfg",
+    "kubeconfig",
+    "credentials",
+    "jenkinsfile",
+    "bitbucket-pipelines.yml",
+    ".clinerules",
 }
 
 SCAN_EXTENSIONS = {
@@ -114,6 +139,15 @@ SCAN_EXTENSIONS = {
     ".zsh",
     ".ps1",
     ".cloud-init",
+    ".pem",
+    ".key",
+    ".ppk",
+    ".p12",
+    ".pfx",
+    ".tfvars",
+    ".properties",
+    ".xml",
+    ".mdc",
 }
 
 MAX_FILE_BYTES = 2 * 1024 * 1024

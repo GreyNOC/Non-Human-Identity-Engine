@@ -68,14 +68,7 @@ def _delta(finding: Finding, key: str) -> FindingDelta:
 
 def find_previous_scan(storage: Storage, current: ScanResult) -> dict[str, Any] | None:
     """Return the most recent prior scan for the same project_path."""
-    history = storage.list_scans()
-    candidates = [
-        row
-        for row in history
-        if row.get("project_path") == current.project_path and row.get("scan_id") != current.scan_id
-    ]
-    candidates.sort(key=lambda row: row.get("completed_at", ""), reverse=True)
-    return candidates[0] if candidates else None
+    return storage.find_previous_scan(current.project_path, current.scan_id)
 
 
 def compute_trend(storage: Storage | None, current: ScanResult) -> TrendReport:
@@ -84,11 +77,9 @@ def compute_trend(storage: Storage | None, current: ScanResult) -> TrendReport:
     prior_row = find_previous_scan(storage, current)
     if prior_row is None:
         return TrendReport(has_prior=False, previous_scan_id=None, previous_completed_at=None)
-    prior_scan = storage.get_scan(prior_row["scan_id"])
-    if prior_scan is None:
-        return TrendReport(has_prior=False, previous_scan_id=None, previous_completed_at=None)
+    prior_findings = storage.get_findings(prior_row["scan_id"])
     current_map = {finding_baseline_key(f): f for f in current.findings}
-    prior_map = {finding_baseline_key(f): f for f in prior_scan.findings}
+    prior_map = {finding_baseline_key(f): f for f in prior_findings}
     current_keys = set(current_map)
     prior_keys = set(prior_map)
     new_keys = sorted(current_keys - prior_keys)
@@ -98,8 +89,8 @@ def compute_trend(storage: Storage | None, current: ScanResult) -> TrendReport:
     resolved_findings = [_delta(prior_map[key], key) for key in resolved_keys]
     return TrendReport(
         has_prior=True,
-        previous_scan_id=prior_scan.scan_id,
-        previous_completed_at=prior_scan.completed_at,
+        previous_scan_id=prior_row["scan_id"],
+        previous_completed_at=prior_row["completed_at"],
         new_findings=new_findings,
         resolved_findings=resolved_findings,
         unchanged_count=len(unchanged_keys),

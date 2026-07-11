@@ -6,8 +6,9 @@ can answer "who do we ask about this?" rather than just "this exists."
 
 from __future__ import annotations
 
+import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
@@ -19,11 +20,18 @@ CODEOWNERS_LOCATIONS = (
     "CODEOWNERS",
 )
 
+_PORCELAIN_HEADER_RE = re.compile(r"^([0-9a-f]{40})\s+(\d+)\s+(\d+)(?:\s+(\d+))?$")
+
 
 @dataclass
 class CodeownersRule:
     pattern: str
     owners: list[str]
+    globs: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.globs:
+            self.globs = _glob_for_pattern(self.pattern)
 
 
 @dataclass
@@ -105,7 +113,7 @@ def codeowners_for_path(rules: list[CodeownersRule], rel_path: str) -> list[str]
         rel = rel[2:]
     matched: list[str] = []
     for rule in rules:
-        for glob in _glob_for_pattern(rule.pattern):
+        for glob in rule.globs:
             if fnmatch(rel, glob):
                 matched = rule.owners
                 break
@@ -164,6 +172,78 @@ def git_blame_owner(
     return BlameOwner(email=email, name=name, timestamp=timestamp)
 
 
+def _batch_blame_owners(
+    repo_root: Path,
+    file_path: str,
+    line_numbers: list[int],
+    *,
+    timeout_seconds: int = 30,
+) -> dict[int, BlameOwner] | None:
+    """Blame several lines of one file with a single `git blame` subprocess.
+
+    Returns a {line_number: BlameOwner} map, or None when the batched call
+    fails (callers should fall back to per-line git_blame_owner).
+    """
+    rel = file_path.replace("\\", "/")
+    args = ["git", "-C", str(repo_root), "blame"]
+    for number in sorted(set(line_numbers)):
+        args.extend(["-L", f"{number},{number}"])
+    args.extend(["--porcelain", "--", rel])
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            errors="replace",
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    owners: dict[int, BlameOwner] = {}
+    commit_meta: dict[str, dict[str, object]] = {}
+    current_sha: str | None = None
+    current_line: int | None = None
+    for line in result.stdout.splitlines():
+        if line.startswith("\t"):
+            if current_sha is not None and current_line is not None:
+                meta = commit_meta.get(current_sha, {})
+                email = str(meta.get("email", "") or "")
+                name = str(meta.get("name", "") or "")
+                timestamp = meta.get("timestamp")
+                if email or name:
+                    owners[current_line] = BlameOwner(
+                        email=email,
+                        name=name,
+                        timestamp=timestamp if isinstance(timestamp, int) else None,
+                    )
+            current_sha = None
+            current_line = None
+            continue
+        header = _PORCELAIN_HEADER_RE.match(line)
+        if header:
+            current_sha = header.group(1)
+            current_line = int(header.group(3))
+            commit_meta.setdefault(current_sha, {})
+            continue
+        if current_sha is None:
+            continue
+        if line.startswith("author-mail "):
+            mail = line[len("author-mail "):].strip()
+            if mail.startswith("<") and mail.endswith(">"):
+                mail = mail[1:-1]
+            commit_meta[current_sha]["email"] = mail
+        elif line.startswith("author-time "):
+            try:
+                commit_meta[current_sha]["timestamp"] = int(line[len("author-time "):].strip())
+            except (TypeError, ValueError):
+                pass
+        elif line.startswith("author "):
+            commit_meta[current_sha]["name"] = line[len("author "):].strip()
+    return owners
+
+
 def describe_owner(blame: BlameOwner | None, codeowners: list[str]) -> str | None:
     parts: list[str] = []
     if blame is not None:
@@ -180,6 +260,9 @@ def enrich_identity_owners(identities, project_root: str | Path) -> int:
     root = Path(project_root).resolve()
     rules = load_codeowners(root)
     enriched = 0
+    rel_cache: dict[str, str | None] = {}
+    candidates: list[tuple[object, str, int]] = []
+    lines_by_file: dict[str, set[int]] = {}
     for identity in identities:
         if identity.owner:
             continue
@@ -188,14 +271,43 @@ def enrich_identity_owners(identities, project_root: str | Path) -> int:
         if not identity.file_path or not identity.line_number:
             continue
         try:
-            abs_path = Path(identity.file_path)
-            try:
-                rel = abs_path.resolve().relative_to(root)
-            except (ValueError, OSError):
+            file_key = str(identity.file_path)
+            if file_key not in rel_cache:
+                try:
+                    rel_cache[file_key] = str(Path(file_key).resolve().relative_to(root)).replace("\\", "/")
+                except (ValueError, OSError):
+                    rel_cache[file_key] = None
+            rel_str = rel_cache[file_key]
+            if rel_str is None:
                 continue
-            rel_str = str(rel).replace("\\", "/")
-            blame = git_blame_owner(root, rel_str, int(identity.line_number))
-            owners = codeowners_for_path(rules, rel_str) if rules else []
+            line = int(identity.line_number)
+        except Exception:
+            continue
+        candidates.append((identity, rel_str, line))
+        lines_by_file.setdefault(rel_str, set()).add(line)
+
+    blame_by_location: dict[tuple[str, int], BlameOwner | None] = {}
+    for rel_str, numbers in lines_by_file.items():
+        try:
+            batched = _batch_blame_owners(root, rel_str, sorted(numbers))
+        except Exception:
+            batched = None
+        for number in numbers:
+            if batched is None:
+                blame_by_location[(rel_str, number)] = git_blame_owner(root, rel_str, number)
+            else:
+                blame_by_location[(rel_str, number)] = batched.get(number)
+
+    codeowners_cache: dict[str, list[str]] = {}
+    for identity, rel_str, line in candidates:
+        try:
+            blame = blame_by_location.get((rel_str, line))
+            if rules:
+                if rel_str not in codeowners_cache:
+                    codeowners_cache[rel_str] = codeowners_for_path(rules, rel_str)
+                owners = codeowners_cache[rel_str]
+            else:
+                owners = []
             described = describe_owner(blame, owners)
             if described:
                 identity.owner = described

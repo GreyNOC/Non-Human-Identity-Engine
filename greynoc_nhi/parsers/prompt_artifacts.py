@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
@@ -17,10 +19,11 @@ PROMPT_FILE_NAMES = {
     "developer_prompt",
     ".cursorrules",
     ".windsurfrules",
+    ".clinerules",
     "copilot-instructions.md",
 }
 
-PROMPT_EXTENSIONS = {".md", ".mdx", ".prompt"}
+PROMPT_EXTENSIONS = {".md", ".mdx", ".mdc", ".prompt"}
 CODE_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".jsx"}
 
 PROMPT_MARKERS = {
@@ -62,15 +65,24 @@ EXCESSIVE_AGENCY_RE = re.compile(
     re.I,
 )
 ENCODED_EXFIL_RE = re.compile(r"base64 encode|compress and send|encode the output", re.I)
+# [\s\S] lets payloads span newlines (multi-line HTML comments are the natural
+# formatting for rules-file backdoors); bounded quantifiers keep matching
+# linear on large comments.
 HIDDEN_INSTRUCTION_RE = re.compile(
-    r"<!--.*?(ignore|reveal|exfiltrate|system prompt|developer prompt|secret|tool).*?-->|"
-    r"\[//\]:\s*#\s*\(.*?(ignore|reveal|exfiltrate|system prompt|developer prompt|secret|tool).*?\)|"
-    r"<(?:span|div)[^>]+display\s*:\s*none[^>]*>.*?(ignore|reveal|exfiltrate|system prompt|developer prompt|secret|tool)",
+    r"<!--[\s\S]{0,600}?(ignore|reveal|exfiltrate|system prompt|developer prompt|secret|tool)[\s\S]{0,600}?-->|"
+    r"\[//\]:\s*#\s*\([\s\S]{0,600}?(ignore|reveal|exfiltrate|system prompt|developer prompt|secret|tool)[\s\S]{0,600}?\)|"
+    r"<(?:span|div)[^>]+display\s*:\s*none[^>]*>[\s\S]{0,600}?(ignore|reveal|exfiltrate|system prompt|developer prompt|secret|tool)",
     re.I,
 )
+# The optional identifier prefix lets env-style names (OPENAI_API_KEY,
+# GITHUB_TOKEN) match; \b alone fails after an underscore.
 SECRET_ASSIGN_RE = re.compile(
-    r"(?i)\b(?:api[_-]?key|token|secret|password|credential|client_secret)\b\s*[:=]\s*['\"]?([^'\"\s,`;]{12,})"
+    r"(?i)\b[A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|credential|client_secret)\b\s*[:=]\s*['\"]?([^'\"\s,`;]{12,})"
 )
+# Zero-width, bidi-control, word-joiner, BOM, and Unicode tag characters used
+# to hide instructions from human reviewers.
+INVISIBLE_CHARS_RE = re.compile("[\\u200b-\\u200f\\u2060-\\u2064\\ufeff]|[\\U000e0000-\\U000e007f]")
+INVISIBLE_CHARS_THRESHOLD = 3
 
 
 def should_parse(path: Path) -> bool:
@@ -89,12 +101,19 @@ def _code_context_is_prompt(line: str, file_is_prompt: bool) -> bool:
     return file_is_prompt or any(marker in lowered for marker in PROMPT_MARKERS)
 
 
+_LINE_RES = (INJECTION_RE, SYSTEM_LEAK_RE, SENSITIVE_DISCLOSURE_RE, ENCODED_EXFIL_RE, EXCESSIVE_AGENCY_RE, SECRET_ASSIGN_RE)
+
+
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []
     is_prompt_file = path.suffix.lower() in PROMPT_EXTENSIONS or path.name.lower() in PROMPT_FILE_NAMES
     hidden_scanned = False
 
-    for number, line in enumerate(text.splitlines(), 1):
+    # Whole-text prefilter: a stripped line is a substring of text, so when no
+    # pattern matches the full text the per-line loop cannot emit anything.
+    has_line_work = any(pattern.search(text) for pattern in _LINE_RES)
+    lines = text.splitlines() if has_line_work else []
+    for number, line in enumerate(lines, 1):
         stripped = line.strip()
         if not stripped:
             continue
@@ -202,6 +221,26 @@ def parse(path: Path, text: str) -> list[Signal]:
                     source="prompt artifact",
                     evidence=match.group(0),
                     tags=["prompt_artifact", "untrusted_context", "hidden_instruction"],
+                    ai_attack_class="indirect prompt injection",
+                    attack_chain_stage="untrusted input",
+                    confidence="high",
+                )
+            )
+
+    if is_prompt_file:
+        invisible_count = len(INVISIBLE_CHARS_RE.findall(text))
+        if invisible_count >= INVISIBLE_CHARS_THRESHOLD:
+            first = INVISIBLE_CHARS_RE.search(text)
+            signals.append(
+                make_signal(
+                    rule_id="nhi_prompt_artifact_hidden_instruction",
+                    file_path=path,
+                    line_number=text.count("\n", 0, first.start()) + 1 if first else None,
+                    name=f"{path.name} invisible characters",
+                    identity_type="ai_agent",
+                    source="prompt artifact",
+                    evidence=f"{invisible_count} invisible or zero-width characters detected in prompt-class file",
+                    tags=["prompt_artifact", "untrusted_context", "hidden_instruction", "invisible_characters"],
                     ai_attack_class="indirect prompt injection",
                     attack_chain_stage="untrusted input",
                     confidence="high",

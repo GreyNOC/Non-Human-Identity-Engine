@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = 1
+__version__ = 2
 
 import re
 from pathlib import Path
@@ -10,7 +10,7 @@ from pathlib import Path
 from greynoc_nhi.confidence import infer_confidence, should_suppress_candidate
 from greynoc_nhi.masking import looks_like_secret
 from greynoc_nhi.parsers.base import Signal, make_signal
-from greynoc_nhi.utils import flatten_json, line_number_for_key_value, parse_json_safely, simple_yaml_pairs
+from greynoc_nhi.utils import flatten_json, parse_json_safely, simple_yaml_pairs
 
 COMMON_KEYS = {
     "api_key",
@@ -48,8 +48,48 @@ _LINE_KV_RE = re.compile(
     re.I,
 )
 
+_INLINE_COMMENT_RE = re.compile(r"\s[#;]")
+
 def should_parse(path: Path) -> bool:
-    return path.suffix.lower() in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".py", ".js", ".ts"}
+    return path.suffix.lower() in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".py", ".js", ".ts", ".sh", ".bash", ".zsh", ".ps1"}
+
+def _config_kv_pairs(text: str) -> list[tuple[str, str, int]]:
+    """Key/value extraction for TOML/INI-style files that assign with '=' or ':'.
+
+    simple_yaml_pairs only splits on ':', which makes '=' assignments in
+    .toml/.ini/.cfg/.conf invisible; this splits on whichever separator
+    appears first and strips trailing '# ...' / '; ...' comments from
+    unquoted values.
+    """
+    rows: list[tuple[str, str, int]] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";", "[")):
+            continue
+        equals = stripped.find("=")
+        colon = stripped.find(":")
+        if equals == -1 and colon == -1:
+            continue
+        separator = "=" if equals != -1 and (colon == -1 or equals < colon) else ":"
+        key, value = stripped.split(separator, 1)
+        value = value.strip()
+        if value[:1] in {"'", '"'}:
+            closing = value.find(value[0], 1)
+            value = value[1:closing] if closing > 0 else value.strip("'\"")
+        else:
+            value = _INLINE_COMMENT_RE.split(value, 1)[0].strip().strip("'\"")
+        rows.append((key.strip("- ").strip(), value, number))
+    return rows
+
+def _line_number_in(lines: list[str], key: str, value: str) -> int | None:
+    """Same semantics as utils.line_number_for_key_value over precomputed lines."""
+    key_tail = key.split(".")[-1].split("[")[0]
+    for number, line in enumerate(lines, 1):
+        if key_tail and key_tail in line:
+            return number
+        if value and value in line:
+            return number
+    return None
 
 def _rule_for(key: str, value: str) -> str:
     lower = key.lower()
@@ -68,17 +108,21 @@ def _rule_for(key: str, value: str) -> str:
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []
     rows: list[tuple[str, object, int | None]] = []
-    data = parse_json_safely(text) if path.suffix.lower() == ".json" else None
+    suffix = path.suffix.lower()
+    data = parse_json_safely(text) if suffix == ".json" else None
     if data is not None:
         for key, value in flatten_json(data):
             rows.append((key, value, None))
-    elif path.suffix.lower() in {".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf"}:
+    elif suffix in {".yaml", ".yml"}:
         rows.extend((key, value, line) for key, value, line in simple_yaml_pairs(text))
+    elif suffix in {".toml", ".ini", ".cfg", ".conf"}:
+        rows.extend((key, value, line) for key, value, line in _config_kv_pairs(text))
     else:
         for number, line in enumerate(text.splitlines(), 1):
             match = _LINE_KV_RE.search(line)
             if match:
                 rows.append((match.group(1), match.group(2), number))
+    lines: list[str] | None = None
     for key, value, line in rows:
         key_tail = str(key).split(".")[-1].lower()
         normalized = key_tail.replace("-", "_")
@@ -89,7 +133,12 @@ def parse(path: Path, text: str) -> list[Signal]:
             continue
         if not looks_like_secret(value_s) and "-----BEGIN" not in value_s and "://" not in value_s:
             continue
-        resolved_line = line or line_number_for_key_value(text, str(key), value_s)
+        if line is not None:
+            resolved_line = line
+        else:
+            if lines is None:
+                lines = text.splitlines()
+            resolved_line = _line_number_in(lines, str(key), value_s)
         signals.append(
             make_signal(
                 rule_id=_rule_for(normalized, value_s),

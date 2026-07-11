@@ -10,8 +10,10 @@ from pathlib import Path
 import pytest
 
 from greynoc_nhi.engine import Engine
+from greynoc_nhi.models import NonHumanIdentity
 from greynoc_nhi.ownership import (
     CodeownersRule,
+    _batch_blame_owners,
     codeowners_for_path,
     describe_owner,
     enrich_identity_owners,
@@ -140,3 +142,88 @@ def test_no_owner_enrich_flag_skips_lookup(tmp_path: Path) -> None:
     engine = Engine(db_path=tmp_path / "db.sqlite3", cache_enabled=False)
     result = engine.run_scan(tmp_path, persist=False, enrich_owners=False)
     assert all(identity.owner is None for identity in result.identities)
+
+
+def test_codeowners_rule_precomputes_globs() -> None:
+    rule = CodeownersRule(pattern="docs/", owners=["@docs"])
+    assert rule.globs, "expected globs to be populated at construction time"
+    parsed = parse_codeowners_text("src/api/*.py @api-team\n")
+    assert parsed[0].globs
+    assert codeowners_for_path(parsed, "src/api/server.py") == ["@api-team"]
+
+
+def _identity(file_path: str, line_number: int, suffix: str) -> NonHumanIdentity:
+    return NonHumanIdentity(
+        id=f"nhi-{suffix}",
+        name=f"IDENTITY_{suffix}",
+        identity_type="api_key",
+        source="test",
+        file_path=file_path,
+        line_number=line_number,
+    )
+
+
+def test_batch_blame_owners_maps_lines(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    target = tmp_path / "config.txt"
+    target.write_text("first line\nsecond line\nthird line\n", encoding="utf-8")
+    _commit(tmp_path, "init")
+
+    owners = _batch_blame_owners(tmp_path, "config.txt", [1, 3])
+    assert owners is not None
+    assert set(owners) == {1, 3}
+    assert owners[1].email == "alice@example.com"
+    assert owners[3].email == "alice@example.com"
+
+
+def test_batch_blame_matches_single_line_blame(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    target = tmp_path / "config.txt"
+    target.write_text("first line\nsecond line\n", encoding="utf-8")
+    _commit(tmp_path, "init")
+
+    single = git_blame_owner(tmp_path, "config.txt", 2)
+    batched = _batch_blame_owners(tmp_path, "config.txt", [2])
+    assert single is not None and batched is not None
+    assert batched[2].email == single.email
+    assert batched[2].name == single.name
+    assert batched[2].timestamp == single.timestamp
+
+
+def test_batch_blame_out_of_range_returns_none(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    target = tmp_path / "config.txt"
+    target.write_text("only line\n", encoding="utf-8")
+    _commit(tmp_path, "init")
+
+    assert _batch_blame_owners(tmp_path, "config.txt", [99]) is None
+
+
+def test_enrich_batches_one_subprocess_per_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _init_repo(tmp_path)
+    target = tmp_path / "config.txt"
+    target.write_text("first line\nsecond line\nthird line\n", encoding="utf-8")
+    _commit(tmp_path, "init")
+
+    import greynoc_nhi.ownership as ownership_module
+
+    real_run = ownership_module.subprocess.run
+    blame_calls: list[list[str]] = []
+
+    def counting_run(args, **kwargs):
+        if "blame" in args:
+            blame_calls.append(list(args))
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(ownership_module.subprocess, "run", counting_run)
+    identities = [
+        _identity(str(target), 1, "a"),
+        _identity(str(target), 2, "b"),
+        _identity(str(target), 2, "c"),
+    ]
+    enriched = enrich_identity_owners(identities, tmp_path)
+    assert enriched == 3
+    assert len(blame_calls) == 1, "expected a single batched git blame per file"
+    for identity in identities:
+        assert identity.owner is not None
+        assert "alice@example.com" in identity.owner

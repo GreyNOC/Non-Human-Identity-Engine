@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
@@ -9,12 +11,27 @@ from greynoc_nhi.parsers.base import Signal, make_signal
 from greynoc_nhi.utils import line_number_for
 
 TEXT_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".md", ".mdx", ".prompt", ".ipynb"}
-RAG_MARKERS = {"langchain", "llamaindex", "llama_index", "haystack", "crewai", "retriever", "retrievalqa", "vectorstore", "vector_store", "rag", "embedding"}
+# "rag" itself is matched word-bounded via _RAG_WORD_RE so "storage",
+# "average", "coverage", or "leverage" do not flag ordinary code.
+RAG_MARKERS = {"langchain", "langgraph", "llamaindex", "llama_index", "haystack", "crewai", "retriever", "retrievalqa", "vectorstore", "vector_store", "embedding"}
 VECTOR_STORES = {"chroma", "pinecone", "weaviate", "qdrant", "faiss", "milvus", "pgvector", "elasticsearch", "opensearch"}
-UNTRUSTED_SOURCES = {"web", "url", "http", "github issue", "github issues", "slack", "email", "gmail", "google drive", "gdrive", "pdf", "notion", "jira", "s3", "blob"}
+# Stores that are commonly plain search backends rather than RAG stores.
+AMBIGUOUS_VECTOR_STORES = {"elasticsearch", "opensearch"}
+# "url" and "web" are matched word-bounded via _UNTRUSTED_WORD_RE so "curl",
+# "urllib", and "webpack" do not count as untrusted sources.
+UNTRUSTED_SOURCES = {"http", "github issue", "github issues", "slack", "email", "gmail", "google drive", "gdrive", "pdf", "notion", "jira", "s3", "blob"}
 ACCESS_FILTERS = {"tenant_id", "tenantid", "organization_id", "org_id", "user_id", "owner_id", "metadata_filter", "where=", "where:", "filter=", "filter:", "acl", "document_acl", "permissions"}
 WRITABLE_MARKERS = {"upsert", "add_documents", "adddocuments", "insert", "write", "ingest", "loader", "crawl", "sync"}
 TOOL_SINKS = {"shell", "terminal", "github", "email", "database", "sql", "docker", "kubernetes", "terraform", "aws", "azure", "gcp", "deploy", "send_email"}
+
+_RAG_WORD_RE = re.compile(r"(?<![a-z0-9_])rag(?![a-z0-9_])")
+_UNTRUSTED_WORD_RE = re.compile(r"(?<![a-z0-9])(?:url|web)(?![a-z0-9])")
+# Single alternation instead of one re.search per sink marker.
+_TOOL_SINKS_RE = re.compile(
+    r"(?<![a-z0-9_-])(?:"
+    + "|".join(sorted(map(re.escape, TOOL_SINKS), key=len, reverse=True))
+    + r")(?![a-z0-9_-])"
+)
 
 
 def should_parse(path: Path) -> bool:
@@ -27,25 +44,27 @@ def _contains_any(lowered: str, markers: set[str]) -> bool:
 
 
 def _tools(lowered: str) -> list[str]:
-    tools = sorted({marker for marker in TOOL_SINKS if re.search(rf"(?<![a-z0-9_-]){re.escape(marker)}(?![a-z0-9_-])", lowered)})
+    tools = sorted(set(_TOOL_SINKS_RE.findall(lowered)))
     return ["database" if tool == "sql" else "shell" if tool == "terminal" else tool for tool in tools]
 
 
 def parse(path: Path, text: str) -> list[Signal]:
     lowered = text.lower()
-    if not (_contains_any(lowered, RAG_MARKERS) or _contains_any(lowered, VECTOR_STORES)):
+    has_rag = _contains_any(lowered, RAG_MARKERS) or bool(_RAG_WORD_RE.search(lowered))
+    stores = sorted(store for store in VECTOR_STORES if store in lowered)
+    if not (has_rag or stores):
         return []
 
     signals: list[Signal] = []
-    stores = sorted(store for store in VECTOR_STORES if store in lowered)
-    has_rag = _contains_any(lowered, RAG_MARKERS)
-    has_untrusted_source = _contains_any(lowered, UNTRUSTED_SOURCES)
+    has_untrusted_source = _contains_any(lowered, UNTRUSTED_SOURCES) or bool(_UNTRUSTED_WORD_RE.search(lowered))
     has_access_filter = _contains_any(lowered, ACCESS_FILTERS)
     has_writable_kb = _contains_any(lowered, WRITABLE_MARKERS)
+    has_ingestion = has_writable_kb or "loader" in lowered or "load(" in lowered
     tools = _tools(lowered)
     provider = ", ".join(stores) if stores else None
+    ambiguous_stores_only = bool(stores) and not has_rag and set(stores) <= AMBIGUOUS_VECTOR_STORES
 
-    if has_untrusted_source and has_rag:
+    if has_untrusted_source and has_rag and has_ingestion:
         signals.append(
             make_signal(
                 rule_id="nhi_rag_untrusted_source_ingestion",
@@ -66,7 +85,7 @@ def parse(path: Path, text: str) -> list[Signal]:
             )
         )
 
-    if (stores or has_rag) and not has_access_filter:
+    if (stores or has_rag) and not ambiguous_stores_only and not has_access_filter:
         signals.append(
             make_signal(
                 rule_id="nhi_rag_no_access_filter",
