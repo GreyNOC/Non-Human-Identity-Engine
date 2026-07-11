@@ -42,7 +42,11 @@ jobs:
         run: pytest -q
 
       - name: Run Bandit security scan
-        run: bandit -r greynoc_nhi -q
+        # Gate on medium+ severity, matching security.yml's audit job. Low-severity
+        # findings here are structural to a git-shelling secret scanner: B105 fires
+        # on token-prefix detection patterns (not real credentials), and
+        # B404/B603/B607 on fixed-argument git subprocess calls (never shell=True).
+        run: bandit -r greynoc_nhi -q --severity-level medium
 
       - name: Run dependency audit
         run: pip-audit
