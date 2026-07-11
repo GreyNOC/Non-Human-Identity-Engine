@@ -7,14 +7,16 @@ from pathlib import Path
 
 from greynoc_nhi.parsers.base import Signal, make_signal
 
-__version__ = 1
+__version__ = 2
 
 PAM_CONFIG_NAMES = {"sshd", "common-auth", "system-auth", "password-auth", "login", "sudo", "su"}
 DEPLOYMENT_SUFFIXES = {".sh", ".bash", ".zsh", ".ps1", ".yaml", ".yml", ".tf", ".conf", ".cfg", ".ini", ".md", ".txt"}
-TRUSTED_MODULE_DIR_RE = re.compile(r"^/(?:lib(?:64)?|lib/[^/]+|usr/lib[^/]*|usr/local/lib[^/]*)/security/", re.I)
+TRUSTED_MODULE_DIR_RE = re.compile(r"^/(?:lib(?:64)?|lib/[^/]+|usr/lib[^/]*(?:/[^/]+)?|usr/local/lib[^/]*)/security/", re.I)
 PAM_LINE_RE = re.compile(r"^\s*(auth|account|password|session)\s+(\S+)\s+(\S+)", re.I)
 PAM_PATH_RE = re.compile(r"/etc/pam\.d/(?:sshd|common-auth|system-auth|password-auth|login|sudo|su)\b", re.I)
-SECURITY_MODULE_PATH_RE = re.compile(r"(?P<path>/(?:lib(?:64)?|lib/[^/\s]+|usr/lib[^\s/]*|usr/local/lib[^\s/]*)/security/[A-Za-z0-9_.+-]+\.so)", re.I)
+PAM_CONTEXT_RE = re.compile(r"pam_|/etc/pam\.d/|usepam", re.I)
+USEPAM_RE = re.compile(r"\busepam[\s=]+[\"']?([A-Za-z0-9]+)", re.I)
+SECURITY_MODULE_PATH_RE = re.compile(r"(?P<path>/(?:lib(?:64)?|lib/[^/\s]+|usr/lib[^\s/]*(?:/[^/\s]+)?|usr/local/lib[^\s/]*)/security/[A-Za-z0-9_.+-]+\.so)", re.I)
 ABSOLUTE_SO_RE = re.compile(r"(?P<path>/(?:[^ \t'\";]+/)+[A-Za-z0-9_.+-]+\.so)")
 PAM_MODIFY_RE = re.compile(
     r"(?:(?:sed|perl)\s+-i\b.*?/etc/pam\.d/|echo\b.*?(?:>>|tee\s+-a)\s*/etc/pam\.d/|(?:cp|install|mv)\b.*?\.so\b.*?/security/)",
@@ -23,20 +25,29 @@ PAM_MODIFY_RE = re.compile(
 PAM_SENSITIVE_MODULES = {"pam_exec.so", "pam_python.so"}
 KNOWN_PAM_MODULES = {
     "pam_access.so",
+    "pam_apparmor.so",
     "pam_cap.so",
+    "pam_chroot.so",
     "pam_debug.so",
     "pam_deny.so",
     "pam_echo.so",
+    "pam_ecryptfs.so",
     "pam_env.so",
     "pam_exec.so",
     "pam_faildelay.so",
     "pam_faillock.so",
     "pam_filter.so",
+    "pam_fprintd.so",
     "pam_ftp.so",
+    "pam_gnome_keyring.so",
     "pam_group.so",
     "pam_issue.so",
     "pam_keyinit.so",
+    "pam_krb5.so",
+    "pam_kwallet5.so",
     "pam_lastlog.so",
+    "pam_lastlog2.so",
+    "pam_ldap.so",
     "pam_limits.so",
     "pam_listfile.so",
     "pam_localuser.so",
@@ -44,10 +55,13 @@ KNOWN_PAM_MODULES = {
     "pam_mail.so",
     "pam_mkhomedir.so",
     "pam_motd.so",
+    "pam_mount.so",
     "pam_namespace.so",
     "pam_nologin.so",
+    "pam_oddjob_mkhomedir.so",
     "pam_permit.so",
     "pam_pwhistory.so",
+    "pam_pwquality.so",
     "pam_rhosts.so",
     "pam_rootok.so",
     "pam_securetty.so",
@@ -57,14 +71,18 @@ KNOWN_PAM_MODULES = {
     "pam_sss.so",
     "pam_succeed_if.so",
     "pam_systemd.so",
+    "pam_systemd_home.so",
     "pam_tally2.so",
     "pam_time.so",
     "pam_timestamp.so",
+    "pam_tty_audit.so",
     "pam_umask.so",
     "pam_unix.so",
     "pam_userdb.so",
+    "pam_usertype.so",
     "pam_warn.so",
     "pam_wheel.so",
+    "pam_winbind.so",
     "pam_xauth.so",
 }
 SSH_CRED_THEFT_RE = re.compile(r"\b(SSH_CONNECTION|SSH_CLIENT|SSH_TTY|PAM_AUTHTOK|pam_get_authtok|getpwnam|getspnam)\b", re.I)
@@ -92,8 +110,8 @@ def _module_name(module: str) -> str:
     return module.replace("\\", "/").rsplit("/", 1)[-1]
 
 
-def _line_for_path(text: str, needle: str) -> int | None:
-    for number, line in enumerate(text.splitlines(), 1):
+def _line_for_path(lines: list[str], needle: str) -> int | None:
+    for number, line in enumerate(lines, 1):
         if needle in line:
             return number
     return None
@@ -101,8 +119,7 @@ def _line_for_path(text: str, needle: str) -> int | None:
 
 def _is_pam_context(path: Path, text: str) -> bool:
     normalized = str(path).replace("\\", "/").lower()
-    lower = text.lower()
-    return "/etc/pam.d/" in normalized or "/pam.d/" in normalized or "pam_" in lower or "/etc/pam.d/" in lower or "usepam" in lower
+    return "/etc/pam.d/" in normalized or "/pam.d/" in normalized or bool(PAM_CONTEXT_RE.search(text))
 
 
 def _signal(
@@ -205,23 +222,40 @@ def parse(path: Path, text: str) -> list[Signal]:
     if not _is_pam_context(path, text):
         return signals
 
-    for number, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    is_stock_sshd_config = path.name.lower() == "sshd_config"
+    for number, line in enumerate(lines, 1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         signals.extend(_parse_pam_line(path, text, stripped, number))
-        if "usepam" in stripped.lower():
-            signals.append(
-                _signal(
-                    rule_id="nhi_linux_pam_auth_chain_modified",
-                    path=path,
-                    line=number,
-                    name="SSH UsePAM setting changed",
-                    evidence=stripped,
-                    confidence="medium",
-                    tags=["sshd_config"],
+        usepam_match = USEPAM_RE.search(stripped)
+        if usepam_match:
+            usepam_value = usepam_match.group(1).lower()
+            if usepam_value in {"no", "false", "0"}:
+                signals.append(
+                    _signal(
+                        rule_id="nhi_linux_pam_auth_chain_modified",
+                        path=path,
+                        line=number,
+                        name="SSH UsePAM disabled",
+                        evidence=stripped,
+                        confidence="medium",
+                        tags=["sshd_config", "pam_bypass"],
+                    )
                 )
-            )
+            elif not is_stock_sshd_config:
+                signals.append(
+                    _signal(
+                        rule_id="nhi_linux_pam_auth_chain_modified",
+                        path=path,
+                        line=number,
+                        name="SSH UsePAM setting changed",
+                        evidence=stripped,
+                        confidence="low",
+                        tags=["sshd_config"],
+                    )
+                )
         if SSH_CRED_THEFT_RE.search(stripped):
             signals.append(
                 _signal(
@@ -250,7 +284,7 @@ def parse(path: Path, text: str) -> list[Signal]:
             _signal(
                 rule_id="nhi_linux_pam_auth_chain_modified",
                 path=path,
-                line=_line_for_path(text, "/etc/pam.d/") or _line_for_path(text, "/security/"),
+                line=_line_for_path(lines, "/etc/pam.d/") or _line_for_path(lines, "/security/"),
                 name="Script modifies PAM authentication chain",
                 evidence="Script appears to edit /etc/pam.d or install a PAM module",
                 tags=["auth_chain", "deployment_script"],
@@ -262,20 +296,21 @@ def parse(path: Path, text: str) -> list[Signal]:
             _signal(
                 rule_id="nhi_linux_pam_persistence_path",
                 path=path,
-                line=_line_for_path(text, module_path),
+                line=_line_for_path(lines, module_path),
                 name="PAM module installation path",
                 evidence=module_path,
                 tags=["persistence_path"],
             )
         )
+    has_pamd = "/etc/pam.d/" in text
     for match in ABSOLUTE_SO_RE.finditer(text):
         module_path = match.group("path")
-        if ".so" in module_path and "security" not in module_path and "/etc/pam.d/" in text:
+        if not _trusted_module_path(module_path) and has_pamd:
             signals.append(
                 _signal(
                     rule_id="nhi_linux_pam_module_outside_trusted_dir",
                     path=path,
-                    line=_line_for_path(text, module_path),
+                    line=_line_for_path(lines, module_path),
                     name="PAM absolute module outside trusted security dirs",
                     evidence=module_path,
                     tags=["persistence_path"],
@@ -286,7 +321,7 @@ def parse(path: Path, text: str) -> list[Signal]:
             _signal(
                 rule_id="nhi_linux_pam_auth_chain_modified",
                 path=path,
-                line=_line_for_path(text, "/etc/pam.d/"),
+                line=_line_for_path(lines, "/etc/pam.d/"),
                 name="PAM config append or in-place edit",
                 evidence="Command modifies PAM config under /etc/pam.d",
                 tags=["auth_chain"],

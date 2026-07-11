@@ -63,3 +63,41 @@ dockercreds:
 """
     signals = helm.parse(Path("values.yaml"), text)
     assert any(s["rule_id"] == "nhi_helm_values_image_pull_secret_inline" for s in signals)
+
+
+def test_secret_name_references_are_not_flagged() -> None:
+    text = """
+postgresql:
+  existingSecret: postgresql-credentials
+tls:
+  secretName: my-app-tls-certificate
+app:
+  existing_secret: legacy-credentials-store
+  secretKeyRef: shared-application-secrets
+"""
+    signals = helm.parse(Path("values.yaml"), text)
+    assert signals == []
+
+
+def test_real_secret_still_flagged_next_to_references() -> None:
+    text = """
+postgresql:
+  existingSecret: postgresql-credentials
+  password: GNOC_FAKE_SECRET_DO_NOT_USE_HELMMIX_314159
+"""
+    signals = helm.parse(Path("values.yaml"), text)
+    assert len(signals) == 1
+    assert signals[0]["name"] == "password"
+    assert "GNOC_FAKE_SECRET_DO_NOT_USE" not in signals[0]["evidence"][0]
+
+
+def test_dockerconfigjson_line_number_still_reported() -> None:
+    text = """
+imagePullSecrets:
+  - name: regcred
+dockercreds:
+  dockerconfigjson: ewogICJhdXRocyI6IHsKICAgICJyZWdpc3RyeS5leGFtcGxlLmNvbSI6IHsKICAgICAgImF1dGgiOiAiR05PQ19GQUtFX1NFQ1JFVCIKICAgIH0KICB9Cn0=
+"""
+    signals = helm.parse(Path("values.yaml"), text)
+    inline = [s for s in signals if s["rule_id"] == "nhi_helm_values_image_pull_secret_inline"]
+    assert inline and inline[0]["line_number"] == 5

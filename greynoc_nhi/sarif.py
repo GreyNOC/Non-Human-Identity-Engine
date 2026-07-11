@@ -3,16 +3,41 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePath
 
+from greynoc_nhi import __version__
+from greynoc_nhi.baseline import finding_baseline_key
 from greynoc_nhi.models import Finding, ScanResult
 from greynoc_nhi.utils import assert_no_raw_secret_markers, chmod_private_dir, chmod_private_file
 
 SARIF_VERSION = "2.1.0"
+PROJECT_ROOT_URI_BASE_ID = "PROJECTROOT"
 
 
 def _level(finding: Finding) -> str:
     return {"critical": "error", "high": "error", "medium": "warning", "low": "note"}.get(finding.severity, "warning")
+
+
+def _security_severity(finding: Finding) -> str:
+    """GitHub code scanning severity: 0-10 string derived from the 0-100 risk score."""
+    return f"{min(max(finding.risk_score, 0), 100) / 10:.1f}"
+
+
+def _artifact_location(file_path: str, project_path: str) -> dict:
+    """Return a SARIF artifactLocation with a forward-slash relative uri when possible."""
+    try:
+        rel = Path(file_path).relative_to(project_path).as_posix()
+    except (ValueError, OSError):
+        return {"uri": PurePath(file_path).as_posix()}
+    return {"uri": rel, "uriBaseId": PROJECT_ROOT_URI_BASE_ID}
+
+
+def _project_root_uri(project_path: str) -> str | None:
+    try:
+        uri = Path(project_path).resolve().as_uri()
+    except (ValueError, OSError):
+        return None
+    return uri if uri.endswith("/") else uri + "/"
 
 
 def sarif_dict(scan: ScanResult) -> dict:
@@ -34,8 +59,10 @@ def sarif_dict(scan: ScanResult) -> dict:
                         f"AI risk refs: {', '.join(finding.ai_risk_refs) or 'Unmapped'}"
                     )
                 },
+                "defaultConfiguration": {"level": _level(finding)},
                 "properties": {
                     "severity": finding.severity,
+                    "security-severity": _security_severity(finding),
                     "risk_score": finding.risk_score,
                     "confidence": finding.confidence,
                     "category": finding.category,
@@ -48,52 +75,58 @@ def sarif_dict(scan: ScanResult) -> dict:
     results = []
     for finding in scan.findings:
         region = {"startLine": finding.line_number or 1}
-        results.append(
-            {
-                "ruleId": finding.rule_id,
-                "level": _level(finding),
-                "message": {"text": f"{finding.title}: {finding.why_it_matters} Remediation: {finding.remediation}"},
-                "locations": [
-                    {
-                        "physicalLocation": {
-                            "artifactLocation": {"uri": finding.file_path or scan.project_path},
-                            "region": region,
-                        }
+        result = {
+            "ruleId": finding.rule_id,
+            "level": _level(finding),
+            "message": {"text": f"{finding.title}: {finding.why_it_matters} Remediation: {finding.remediation}"},
+            "partialFingerprints": {
+                "greynocBaselineKey/v1": finding.baseline_key or finding_baseline_key(finding),
+            },
+            "properties": {
+                "severity": finding.severity,
+                "risk_score": finding.risk_score,
+                "confidence": finding.confidence,
+                "category": finding.category,
+                "priority": finding.priority,
+                "baseline_status": finding.baseline_status,
+                "related_identities": finding.related_identities,
+                "owasp_nhi_refs": finding.owasp_nhi_refs,
+                "ai_risk_refs": finding.ai_risk_refs,
+            },
+        }
+        if finding.file_path:
+            result["locations"] = [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": _artifact_location(finding.file_path, scan.project_path),
+                        "region": region,
                     }
-                ],
-                "properties": {
-                    "severity": finding.severity,
-                    "risk_score": finding.risk_score,
-                    "confidence": finding.confidence,
-                    "category": finding.category,
-                    "priority": finding.priority,
-                    "baseline_status": finding.baseline_status,
-                    "related_identities": finding.related_identities,
-                    "owasp_nhi_refs": finding.owasp_nhi_refs,
-                    "ai_risk_refs": finding.ai_risk_refs,
-                },
+                }
+            ]
+        results.append(result)
+    run: dict = {
+        "tool": {
+            "driver": {
+                "name": "GreyNOC Non-Human Identity Risk Engine",
+                "version": __version__,
+                "informationUri": "https://github.com/GreyNOC/Non-Human-Identity-Engine",
+                "rules": rules,
             }
-        )
+        },
+        "results": results,
+        "properties": {
+            "scan_trust_level": scan.scan_trust_level,
+            "policy_decision": scan.policy_decision,
+            "correlation_id": scan.correlation_id,
+        },
+    }
+    root_uri = _project_root_uri(scan.project_path)
+    if root_uri:
+        run["originalUriBaseIds"] = {PROJECT_ROOT_URI_BASE_ID: {"uri": root_uri}}
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": SARIF_VERSION,
-        "runs": [
-            {
-                "tool": {
-                    "driver": {
-                        "name": "GreyNOC Non-Human Identity Risk Engine",
-                        "informationUri": "https://github.com/GreyNOC/Non-Human-Identity-Engine",
-                        "rules": rules,
-                    }
-                },
-                "results": results,
-                "properties": {
-                    "scan_trust_level": scan.scan_trust_level,
-                    "policy_decision": scan.policy_decision,
-                    "correlation_id": scan.correlation_id,
-                },
-            }
-        ],
+        "runs": [run],
     }
 
 

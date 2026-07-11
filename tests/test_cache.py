@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
+
+import greynoc_nhi.cache as cache_module
 from greynoc_nhi.cache import (
     ParserCache,
     content_hash,
@@ -114,6 +118,98 @@ def test_scanner_does_not_cache_secret_bearing_parser_signals(tmp_path: Path) ->
     assert second["cache_hits"] == 0
     assert second["cache_misses"] >= 1
     assert raw_secret.encode() not in cache_path.read_bytes()
+
+
+def test_cache_key_separates_parser_dispatch(tmp_path: Path) -> None:
+    """Identical content under differently-gated filenames must not collide."""
+    cache = ParserCache(tmp_path / "cache.sqlite3")
+    sha = content_hash("same bytes")
+    cache.put(sha, "v=1", [{"rule_id": "generic"}], dispatch="generic_config")
+    assert cache.get(sha, "v=1", dispatch="generic_config,helm") is None
+    cache.put(sha, "v=1", [{"rule_id": "helm"}], dispatch="generic_config,helm")
+    assert cache.get(sha, "v=1", dispatch="generic_config") == [{"rule_id": "generic"}]
+    assert cache.get(sha, "v=1", dispatch="generic_config,helm") == [{"rule_id": "helm"}]
+
+
+def test_scanner_cache_does_not_reuse_hits_across_parser_dispatch(tmp_path: Path) -> None:
+    """values.yaml (helm-gated) must not hit a cache row written for config.yaml."""
+    content = "replicas: 3\nimage: registry.example.com/app\n"
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "config.yaml").write_text(content, encoding="utf-8")
+    (project / "values.yaml").write_text(content, encoding="utf-8")
+
+    scanner = Scanner(cache=ParserCache(tmp_path / "cache.sqlite3"))
+    first = scanner.scan(project)
+    # config.yaml sorts before values.yaml and is cached first; a
+    # content-only key would let values.yaml (helm-gated) hit that row
+    # and silently drop helm-only findings on warm scans.
+    assert first["cache_hits"] == 0
+    assert first["cache_misses"] == 2
+    second = scanner.scan(project)
+    assert second["cache_hits"] == 2
+    assert second["cache_misses"] == 0
+
+
+def test_cache_reuses_persistent_connection_and_close(tmp_path: Path) -> None:
+    cache = ParserCache(tmp_path / "cache.sqlite3")
+    sha = content_hash("payload")
+    cache.put(sha, "v=1", [{"rule_id": "x"}])
+    conn_after_put = cache._conn
+    assert conn_after_put is not None
+    assert cache.get(sha, "v=1") == [{"rule_id": "x"}]
+    assert cache._conn is conn_after_put
+    assert cache.stats() == {"entries": 1}
+    assert cache._conn is conn_after_put
+    cache.close()
+    assert cache._conn is None
+    # Operations after close() lazily reopen.
+    assert cache.get(sha, "v=1") == [{"rule_id": "x"}]
+    cache.close()
+
+
+def test_cache_hit_skips_resanitization_for_clean_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cache = ParserCache(tmp_path / "cache.sqlite3")
+    sha = content_hash("clean file")
+    cache.put(sha, "v=1", [{"rule_id": "x", "evidence": ["TOKEN=[REDACTED:token len=12]"]}])
+
+    calls = {"count": 0}
+    real_sanitize = cache_module.sanitize_signals_for_disk
+
+    def counting_sanitize(signals):
+        calls["count"] += 1
+        return real_sanitize(signals)
+
+    monkeypatch.setattr(cache_module, "sanitize_signals_for_disk", counting_sanitize)
+    fetched = cache.get(sha, "v=1")
+    assert fetched == [{"rule_id": "x", "evidence": ["TOKEN=[REDACTED:token len=12]"]}]
+    assert calls["count"] == 0
+
+
+def test_cache_hit_heals_legacy_row_with_secret_value_key(tmp_path: Path) -> None:
+    """A tampered/legacy row still carrying secret_value is re-sanitized on read."""
+    cache = ParserCache(tmp_path / "cache.sqlite3")
+    sha = content_hash("legacy file")
+    key = cache_module._make_key(sha, "v=1")
+    legacy = [{"rule_id": "x", "secret_value": "GNOC_LEGACY_VALUE_112233", "evidence": ["e"]}]
+    with cache._connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO parser_cache (cache_key, parser_version, signals_json, cached_at) VALUES (?, ?, ?, ?)",
+            (key, "v=1", json.dumps(legacy), "2024-01-01T00:00:00+00:00"),
+        )
+    fetched = cache.get(sha, "v=1")
+    assert fetched is not None
+    assert "secret_value" not in fetched[0]
+
+
+def test_scanner_without_cache_reports_zero_misses(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / ".env").write_text("OPENAI_API_KEY=GNOC_FAKE_SECRET_DO_NOT_USE_NOCACHE_5566\n", encoding="utf-8")
+    result = Scanner(cache=None).scan(project)
+    assert result["scanned_files"] == 1
+    assert result["cache_hits"] == 0
+    assert result["cache_misses"] == 0
 
 
 def test_engine_disables_cache_when_requested(tmp_path: Path) -> None:

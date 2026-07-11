@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__version__ = 1
+
 import re
 from pathlib import Path
 
@@ -28,7 +30,11 @@ MODEL_GATEWAY_RE = re.compile(r"\b(?:litellm|model_gateway|model-gateway|openai-
 LOGGING_RE = re.compile(r"\b(?:logging|audit|success_callback|failure_callback|redact|retention)\b", re.I)
 POLICY_RE = re.compile(r"\b(?:policy|allowlist|allowed_providers|data_residency|no_fallback|fallback_policy|provider_policy)\b", re.I)
 LIMIT_RE = re.compile(r"\b(?:budget|rate_limit|quota|max_tokens|max_iterations|max_steps|timeout|loop_limit|spend|rpm|tpm)\b", re.I)
-AI_PROVIDER_RE = re.compile(r"\b(?:OPENAI_API_KEY|ANTHROPIC_API_KEY|COHERE_API_KEY|GEMINI_API_KEY|AZURE_OPENAI|HUGGINGFACE|litellm)\b", re.I)
+AI_PROVIDER_RE = re.compile(
+    r"\b(?:OPENAI|ANTHROPIC|COHERE|GEMINI|GOOGLE|MISTRAL|GROQ|TOGETHER|OPENROUTER|DEEPSEEK|XAI|FIREWORKS|PERPLEXITY|REPLICATE)_API_KEY\b"
+    r"|\bAZURE_OPENAI\b|\bHUGGINGFACE\b|\blitellm\b",
+    re.I,
+)
 
 
 def should_parse(path: Path) -> bool:
@@ -100,7 +106,20 @@ def parse(path: Path, text: str) -> list[Signal]:
         )
         return signals
 
-    for number, line in enumerate(text.splitlines(), 1):
+    if suffix in MODEL_SAFE_EXTENSIONS:
+        # Safe-format model artifacts decode to binary garbage; nothing below applies.
+        return signals
+
+    # Whole-text prefilter: every per-line rule requires one of these four
+    # patterns somewhere in the text, so skip the per-line loop when none match.
+    has_line_work = bool(
+        MODEL_OUTPUT_RE.search(text)
+        or TRUST_REMOTE_RE.search(text)
+        or FROM_PRETRAINED_RE.search(text)
+        or MODEL_URL_RE.search(text)
+    )
+    lines = text.splitlines() if has_line_work else []
+    for number, line in enumerate(lines, 1):
         if EVAL_RE.search(line):
             _model_output_sink(signals, rule_id="nhi_llm_output_exec_sink", path=path, line_number=number, line=line, title="LLM output to code execution", sink="exec", admin_access=True)
         if SHELL_RE.search(line):

@@ -13,11 +13,12 @@ Files covered:
 * `.cargo/credentials` and `.cargo/credentials.toml` - Cargo registry tokens
 * `.gradle/gradle.properties` and `.gradle/init.gradle` - Maven / Artifactory / Nexus
 * `.netrc` - generic machine/login/password entries
+* `.git-credentials` - `https://user:token@host` entries from git credential store
 """
 
 from __future__ import annotations
 
-__version__ = 1
+__version__ = 2
 
 import re
 from pathlib import Path
@@ -32,6 +33,7 @@ GRADLE_KV_RE = re.compile(
     r"^\s*([A-Za-z][\w.\-]*(?:password|token|secret|api[_-]?key|credential|auth)[\w.\-]*)\s*=\s*(.+)$",
     re.IGNORECASE,
 )
+GIT_CREDENTIALS_URL_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://([^:\s/@]{0,64}):([^@\s/]+)@(\S+)", re.IGNORECASE)
 
 
 def _path_normalized(path: Path) -> str:
@@ -41,7 +43,7 @@ def _path_normalized(path: Path) -> str:
 def should_parse(path: Path) -> bool:
     name = path.name.lower()
     normalized = _path_normalized(path)
-    if name in {".npmrc", ".pypirc", ".netrc"}:
+    if name in {".npmrc", ".pypirc", ".netrc", ".git-credentials"}:
         return True
     if normalized.endswith(".cargo/credentials") or normalized.endswith(".cargo/credentials.toml"):
         return True
@@ -192,6 +194,37 @@ def _parse_gradle(path: Path, text: str) -> list[Signal]:
     return signals
 
 
+def _parse_git_credentials(path: Path, text: str) -> list[Signal]:
+    signals: list[Signal] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        clean = line.strip()
+        if not clean or clean.startswith("#"):
+            continue
+        match = GIT_CREDENTIALS_URL_RE.match(clean)
+        if not match:
+            continue
+        user, secret, host = match.group(1), match.group(2), match.group(3)
+        if secret.startswith("$") or not looks_like_secret(secret):
+            continue
+        signals.append(
+            make_signal(
+                rule_id="nhi_hardcoded_secret",
+                file_path=path,
+                line_number=number,
+                name=f"{host}:{user}" if user else host,
+                identity_type="api_key",
+                source=".git-credentials",
+                evidence=clean,
+                secret_value=secret,
+                provider="git",
+                external_access=True,
+                tags=["git", "credential_store", "supply_chain"],
+                confidence="high",
+            )
+        )
+    return signals
+
+
 def _parse_netrc(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []
     machine = ""
@@ -250,4 +283,6 @@ def parse(path: Path, text: str) -> list[Signal]:
         return _parse_gradle(path, text)
     if name == ".netrc":
         return _parse_netrc(path, text)
+    if name == ".git-credentials":
+        return _parse_git_credentials(path, text)
     return []

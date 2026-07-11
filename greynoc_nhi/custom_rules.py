@@ -103,12 +103,11 @@ def load_rule_pack(path: str | Path | None) -> list[CustomRule]:
 
 def scan_custom_rules(path: Path, text: str, rules: list[CustomRule]) -> list[Signal]:
     signals: list[Signal] = []
-    if not rules:
+    regex_rules = [rule for rule in rules if rule.type != "structural" and rule.compiled is not None]
+    if not regex_rules:
         return signals
     for number, line in enumerate(text.splitlines(), 1):
-        for rule in rules:
-            if rule.type == "structural" or rule.compiled is None:
-                continue
+        for rule in regex_rules:
             for match in rule.compiled.finditer(line):
                 value = match.group(0)
                 if not looks_like_secret(value):

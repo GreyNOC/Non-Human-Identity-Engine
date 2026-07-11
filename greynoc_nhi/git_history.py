@@ -76,12 +76,19 @@ def _run_git_log(
     )
     cmd = [
         "git",
+        # Emit non-ASCII paths raw (UTF-8) instead of C-quoted so the
+        # `+++ b/` prefix match in parse_git_log sees them.
+        "-c",
+        "core.quotePath=false",
         "-C",
         str(project_path),
         "log",
         "-p",
         "--no-color",
         "--no-merges",
+        # Context lines are never consumed (parse_git_log only reads `+`
+        # lines and hunk headers), so drop them to shrink output.
+        "--unified=0",
         f"--format={pretty}",
     ]
     if max_commits is not None and max_commits > 0:
@@ -95,6 +102,7 @@ def _run_git_log(
             capture_output=True,
             text=True,
             timeout=GIT_LOG_TIMEOUT_SECONDS,
+            encoding="utf-8",
             errors="replace",
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
@@ -102,6 +110,29 @@ def _run_git_log(
     if result.returncode != 0:
         raise RuntimeError(f"git log returned {result.returncode}: {result.stderr.strip()[:200]}")
     return result.stdout
+
+
+def _unquote_git_path(quoted: str) -> str:
+    """Decode a C-quoted git path like '"b/caf\\303\\251/.env"' to 'café/.env'.
+
+    Git quotes paths containing escapes-worthy bytes even with
+    core.quotePath=false (embedded quotes, control characters). Falls back
+    to the raw string when decoding fails.
+    """
+    inner = quoted.strip()
+    if inner.startswith('"') and inner.endswith('"') and len(inner) >= 2:
+        inner = inner[1:-1]
+    if inner.startswith("b/"):
+        inner = inner[2:]
+    try:
+        return (
+            inner.encode("latin-1", "backslashreplace")
+            .decode("unicode_escape")
+            .encode("latin-1")
+            .decode("utf-8", "replace")
+        )
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return inner
 
 
 def parse_git_log(output: str) -> list[HistoryChange]:
@@ -154,7 +185,12 @@ def parse_git_log(output: str) -> list[HistoryChange]:
             i += 1
             continue
         if line.startswith("+++ b/"):
-            current_file = line[6:]
+            # Git appends a tab after paths containing spaces.
+            current_file = line[6:].rstrip("\t")
+            i += 1
+            continue
+        if line.startswith('+++ "b/'):
+            current_file = _unquote_git_path(line[4:].rstrip("\t"))
             i += 1
             continue
         if line.startswith("+++ /dev/null"):

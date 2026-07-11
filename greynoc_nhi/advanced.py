@@ -7,7 +7,7 @@ synthetic NHI signals for higher-order risks that single-file parsers cannot see
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +143,8 @@ def derive_risk_paths(identities: list[NonHumanIdentity], scan_raw: dict[str, An
 def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: dict[str, Any]) -> list[dict[str, Any]]:
     """Return higher-order risk signals discovered across the whole scan."""
     project_path = scan_raw["project_path"]
+    scan_surface = scan_raw.get("scan_surface", "repo")
+    is_host_surface = scan_surface == "host"
     signals: list[dict[str, Any]] = []
     by_file: dict[str, list[NonHumanIdentity]] = defaultdict(list)
     for identity in identities:
@@ -167,14 +169,13 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
                 )
             )
 
-    providers = Counter(item.provider for item in identities if item.provider)
-    multi_surface_providers = [
-        provider
-        for provider, count in providers.items()
-        if count >= 2 and len({item.source for item in identities if item.provider == provider}) >= 2
-    ]
-    for provider in multi_surface_providers:
-        provider_items = [item for item in identities if item.provider == provider]
+    by_provider: dict[str, list[NonHumanIdentity]] = defaultdict(list)
+    for identity in identities:
+        if identity.provider:
+            by_provider[identity.provider].append(identity)
+    for provider, provider_items in by_provider.items():
+        if len(provider_items) < 2 or len({item.source for item in provider_items}) < 2:
+            continue
         signals.append(
             _signal(
                 rule_id="nhi_identity_exposure_chain",
@@ -189,6 +190,37 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
                 production_access=any(item.production_access for item in provider_items),
                 data_access_level="customer" if any(item.data_access_level == "customer" for item in provider_items) else "unknown",
                 tags=["exposure_chain"],
+            )
+        )
+
+    by_fingerprint: dict[str, list[NonHumanIdentity]] = defaultdict(list)
+    for identity in identities:
+        if identity.secret_fingerprint:
+            by_fingerprint[identity.secret_fingerprint].append(identity)
+    for fingerprint, group in by_fingerprint.items():
+        history_items = [item for item in group if item.commit_sha]
+        current_items = [item for item in group if not item.commit_sha]
+        if not history_items or not current_items:
+            continue
+        current = current_items[0]
+        historical = history_items[0]
+        commit_ref = historical.commit_short_sha or (historical.commit_sha or "")[:12] or "an earlier commit"
+        current_file = Path(current.file_path or project_path).name
+        signals.append(
+            _signal(
+                rule_id="nhi_history_secret_still_current",
+                project_path=current.file_path or project_path,
+                name=f"Historical secret still present: {current.name}",
+                identity_type="risk correlation",
+                evidence=(
+                    f"A secret committed at {commit_ref} still matches the current working-tree value in {current_file}; "
+                    "history rewrite alone will not remediate this exposure, so the credential must be rotated."
+                ),
+                production_access=current.production_access,
+                external_access=current.external_access,
+                data_access_level=current.data_access_level,
+                related_identities=[historical.id, current.id],
+                tags=["git_history", "rotation_required"],
             )
         )
 
@@ -254,7 +286,7 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
         and item.approval_required is not True
         and (item.admin_access or any("deploy" in permission.lower() or "write-all" in permission.lower() for permission in item.permissions))
     ]
-    if has_ci_broad and ci_deploy_without_gate:
+    if has_ci_broad and ci_deploy_without_gate and not is_host_surface:
         signals.append(
             _signal(
                 rule_id="nhi_ci_deployment_without_approval",
@@ -286,7 +318,11 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
             )
         )
 
-    has_build_secret = any(("docker" in item.tags or "package" in item.tags) and (item.has_secret or item.production_access) for item in identities)
+    has_build_secret = any(
+        ("docker" in item.tags or "package" in item.tags or "package_registry" in item.tags)
+        and (item.has_secret or item.production_access)
+        for item in identities
+    )
     has_docker_host = any("host_access" in item.tags or "privileged" in item.tags for item in identities)
     if has_build_secret and has_docker_host:
         signals.append(
@@ -322,7 +358,9 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
         )
 
     for identity in identities:
-        if identity.has_secret and identity.data_access_level == "customer":
+        # Placeholder-driven (low confidence) secrets must not escalate into a
+        # critical customer-data correlation; the base finding keeps visibility.
+        if identity.has_secret and identity.data_access_level == "customer" and identity.confidence != "low":
             signals.append(
                 _signal(
                     rule_id="nhi_customer_data_secret_coupling",
@@ -340,7 +378,7 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
     ownerless = sum(1 for item in identities if item.owner is None)
     unlogged = sum(1 for item in identities if item.logging_enabled is None or item.logging_enabled is False)
     secret_without_rotation = sum(1 for item in identities if item.has_secret and item.rotation_status in {None, "unknown", "missing"})
-    if len(identities) >= 8 and ownerless / len(identities) >= 0.75 and unlogged / len(identities) >= 0.75:
+    if len(identities) >= 8 and ownerless / len(identities) >= 0.75 and unlogged / len(identities) >= 0.75 and not is_host_surface:
         signals.append(
             _signal(
                 rule_id="nhi_orphaned_identity_cluster",
@@ -360,7 +398,7 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
         for item in identities
         if item.production_access and item.approval_required is not True and (item.admin_access or item.has_secret or item.tools or item.permissions)
     ]
-    if len(prod_without_gate) >= 2:
+    if len(prod_without_gate) >= 2 and not is_host_surface:
         signals.append(
             _signal(
                 rule_id="nhi_production_without_approval_gate",
@@ -404,7 +442,7 @@ def synthesize_advanced_signals(identities: list[NonHumanIdentity], scan_raw: di
             break
 
     gitignore_path = Path(project_path) / ".gitignore"
-    if not gitignore_path.exists() and any(Path(file_path).name.startswith(".env") for file_path in secret_files):
+    if not gitignore_path.exists() and any(Path(file_path).name.startswith(".env") and group for file_path, group in secret_files.items()):
         signals.append(
             _signal(
                 rule_id="nhi_secret_file_not_gitignored",

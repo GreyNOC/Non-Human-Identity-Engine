@@ -33,6 +33,34 @@ def test_load_rule_pack_rejects_invalid_and_redos_patterns(tmp_path):
     assert [signal["rule_id"] for signal in signals] == ["safe"]
 
 
+def test_scan_custom_rules_skips_structural_rules_and_handles_mixed_packs(tmp_path):
+    rule_pack = tmp_path / "rules.json"
+    rule_pack.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "id": "structural_only",
+                        "type": "structural",
+                        "when": {"identity_type": "ai_agent"},
+                        "title": "Structural",
+                    },
+                    {"id": "regex_rule", "pattern": r"GNOC_FAKE_SECRET_DO_NOT_USE_[A-Z0-9_]+", "title": "Regex"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules = load_rule_pack(rule_pack)
+    structural_only = [rule for rule in rules if rule.type == "structural"]
+
+    # A pack containing only structural rules produces no line-scan signals.
+    assert scan_custom_rules(Path("fixture.env"), "TOKEN=GNOC_FAKE_SECRET_DO_NOT_USE_ABC123", structural_only) == []
+    # A mixed pack still emits signals for the regex rules only.
+    signals = scan_custom_rules(Path("fixture.env"), "TOKEN=GNOC_FAKE_SECRET_DO_NOT_USE_ABC123", rules)
+    assert [signal["rule_id"] for signal in signals] == ["regex_rule"]
+
+
 def test_load_rule_pack_ignores_missing_or_malformed_files(tmp_path):
     malformed = tmp_path / "bad.json"
     malformed.write_text("{", encoding="utf-8")

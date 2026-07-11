@@ -13,9 +13,8 @@ from greynoc_nhi.advanced import derive_risk_paths, synthesize_advanced_signals
 from greynoc_nhi.baseline import apply_baseline
 from greynoc_nhi.cache import ParserCache, parser_version_string
 from greynoc_nhi.confidence import normalize_confidence
-from greynoc_nhi.constants import MAX_FILE_BYTES
 from greynoc_nhi.custom_rules import custom_rule_templates
-from greynoc_nhi.masking import RedactionContext, fingerprint_secret, mask_secret, redact_inline_secret
+from greynoc_nhi.masking import RedactionContext, fingerprint_secret, mask_secret, redact_inline_secret, redact_path_text
 from greynoc_nhi.models import Finding, NonHumanIdentity, ScanResult
 from greynoc_nhi.ownership import enrich_identity_owners
 from greynoc_nhi.parsers import PARSERS
@@ -149,6 +148,32 @@ def _safe_text(value: object | None, secret_value: object | None = None, fingerp
     return redact_inline_secret(text, fingerprint_key=fingerprint_key, include_fingerprint=False)
 
 
+def _safe_path(value: object | None, secret_value: object | None = None, fingerprint_key: bytes | str | None = None) -> str | None:
+    """Sanitize scanner-generated path fields without corrupting hash-named segments."""
+    if value is None:
+        return None
+    text = str(value)
+    if secret_value:
+        text = text.replace(str(secret_value), mask_secret(str(secret_value), fingerprint_key=fingerprint_key, include_fingerprint=False))
+    return redact_path_text(text)
+
+
+_COMMIT_SHA_RE = re.compile(r"[0-9a-fA-F]{7,64}")
+
+
+def _safe_commit_sha(value: object | None) -> str | None:
+    """Accept only hex-shaped commit SHAs; git-generated hex can never be a provider token."""
+    sha = str(value or "").strip()
+    return sha if _COMMIT_SHA_RE.fullmatch(sha) else None
+
+
+def _scanner_text(value: object | None) -> str | None:
+    """Pass through git/scanner-generated metadata that cannot carry parser-captured secrets."""
+    if value is None:
+        return None
+    return str(value)
+
+
 def _safe_evidence(value: object, secret_value: object | None = None, fingerprint_key: bytes | str | None = None) -> list[str]:
     if value is None:
         return []
@@ -193,15 +218,34 @@ def _git_head_sha(project_path: str | Path) -> str | None:
 
 
 def _git_dirty_signature(project_path: str | Path) -> str:
-    """Return a short signature of uncommitted content (empty when clean)."""
+    """Return a short signature of uncommitted content (empty when clean).
+
+    The working-tree diff is streamed straight into the hash so a large dirty
+    diff is never materialized as a Python string.
+    """
+    import hashlib
+
     root = Path(project_path)
+    hasher = hashlib.sha256()
+    has_diff = False
     try:
-        diff_result = subprocess.run(
+        diff_proc = subprocess.Popen(
             ["git", "-C", str(project_path), "diff", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=30,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
+        try:
+            while True:
+                chunk = diff_proc.stdout.read(65536)
+                if not chunk:
+                    break
+                if not has_diff and chunk.strip():
+                    has_diff = True
+                hasher.update(chunk)
+            diff_returncode = diff_proc.wait(timeout=30)
+        except Exception:
+            diff_proc.kill()
+            raise
         untracked = subprocess.run(
             ["git", "-C", str(project_path), "ls-files", "--others", "--exclude-standard"],
             capture_output=True,
@@ -210,37 +254,40 @@ def _git_dirty_signature(project_path: str | Path) -> str:
         )
     except (FileNotFoundError, subprocess.SubprocessError, OSError):
         return ""
-    if diff_result.returncode != 0:
+    if diff_returncode != 0:
         return ""
-    untracked_content = _untracked_content_digest(root, untracked.stdout if untracked.returncode == 0 else "")
-    diff_text = diff_result.stdout or ""
-    untracked_text = untracked.stdout or ""
-    if not (diff_text.strip() or untracked_text.strip() or untracked_content.strip()):
+    untracked_text = untracked.stdout if untracked.returncode == 0 else ""
+    untracked_content = _untracked_content_digest(root, untracked_text)
+    if not (has_diff or untracked_text.strip() or untracked_content.strip()):
         return ""
-    blob = diff_text + "\n--untracked--\n" + untracked_text + "\n--untracked-content--\n" + untracked_content
-    import hashlib
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
+    hasher.update(b"\n--untracked--\n")
+    hasher.update(untracked_text.encode("utf-8"))
+    hasher.update(b"\n--untracked-content--\n")
+    hasher.update(untracked_content.encode("utf-8"))
+    return hasher.hexdigest()[:8]
 
 
 def _untracked_content_digest(root: Path, untracked_stdout: str) -> str:
-    """Return a digest input for untracked files without storing their content."""
-    import hashlib
+    """Return a digest input for untracked files without reading their content.
+
+    A (path, size, mtime_ns) stat digest avoids re-reading and hashing every
+    untracked file on each scan; scan_id is only a dedupe/audit key, so a
+    touch-without-change producing a new dirty signature is acceptable.
+    """
+    import stat as stat_module
 
     chunks: list[str] = []
     for rel in sorted(line.strip() for line in untracked_stdout.splitlines() if line.strip()):
         path = root / rel
         try:
-            if not path.is_file():
-                chunks.append(f"{rel}:not-file")
-                continue
-            size = path.stat().st_size
-            if size > MAX_FILE_BYTES:
-                chunks.append(f"{rel}:size={size}:too-large")
-                continue
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            chunks.append(f"{rel}:size={size}:sha256={digest}")
+            file_stat = path.stat()
         except OSError:
             chunks.append(f"{rel}:unreadable")
+            continue
+        if not stat_module.S_ISREG(file_stat.st_mode):
+            chunks.append(f"{rel}:not-file")
+            continue
+        chunks.append(f"{rel}:size={file_stat.st_size}:mtime={file_stat.st_mtime_ns}")
     return "\n".join(chunks)
 
 
@@ -272,7 +319,7 @@ def normalize_signal(signal: dict, fingerprint_key: bytes | str | None = None) -
     tags = sorted(set(item for item in [signal.get("rule_id"), *normalize_string_list(signal.get("tags"))] if item))
     secret_fingerprint = fingerprint_secret(secret_value, key=fingerprint_key) if secret_value else None
     masked_secret = mask_secret(secret_value, fingerprint_key=fingerprint_key) if secret_value else None
-    file_path = _safe_text(signal.get("file_path"))
+    file_path = _safe_path(signal.get("file_path"), secret_value, fingerprint_key)
     line_number = _line_number(signal.get("line_number"))
     permissions = normalize_string_list(signal.get("permissions"))
     scopes = normalize_string_list(signal.get("scopes"))
@@ -321,11 +368,23 @@ def normalize_signal(signal: dict, fingerprint_key: bytes | str | None = None) -
         tags=tags,
         related_identities=normalize_string_list(signal.get("related_identities")),
         confidence=normalize_confidence(signal.get("confidence")),
-        commit_sha=_safe_text(signal.get("commit_sha")),
-        commit_short_sha=_safe_text(signal.get("commit_short_sha")),
-        commit_author=_safe_text(signal.get("commit_author")),
-        commit_date=_safe_text(signal.get("commit_date")),
-    ) 
+        commit_sha=_safe_commit_sha(signal.get("commit_sha")),
+        commit_short_sha=_safe_commit_sha(signal.get("commit_short_sha")),
+        commit_author=_scanner_text(signal.get("commit_author")),
+        commit_date=_scanner_text(signal.get("commit_date")),
+    )
+
+
+def _dedupe_identities(identities: list[NonHumanIdentity]) -> list[NonHumanIdentity]:
+    """Drop duplicate identity ids, keeping first-seen order.
+
+    Later duplicates win (their content replaces the earlier copy) so the
+    in-memory result matches what storage keeps via INSERT OR REPLACE.
+    """
+    by_id: dict[str, NonHumanIdentity] = {}
+    for identity in identities:
+        by_id[identity.id] = identity
+    return list(by_id.values())
 
 
 class Engine:
@@ -432,6 +491,7 @@ class Engine:
                 identities.append(normalize_signal(signal, fingerprint_key=fingerprint_key))
             except Exception as exc:
                 normalization_errors.append({"signal": redact_inline_secret(str(signal.get("rule_id", "unknown"))), "error": redact_inline_secret(str(exc))})
+        identities = _dedupe_identities(identities)
 
         advanced_signals: list[dict[str, Any]] = []
         if not fatal_errors:
@@ -439,6 +499,7 @@ class Engine:
                 advanced_signals = synthesize_advanced_signals(identities, raw)
                 for signal in advanced_signals:
                     identities.append(normalize_signal(signal, fingerprint_key=fingerprint_key))
+                identities = _dedupe_identities(identities)
             except Exception as exc:
                 fatal_errors.append(f"advanced correlation failure: {redact_inline_secret(str(exc))}")
 
@@ -577,6 +638,7 @@ class Engine:
                 identities.append(normalize_signal(signal, fingerprint_key=fingerprint_key))
             except Exception as exc:
                 normalization_errors.append({"signal": redact_inline_secret(str(signal.get("rule_id", "unknown"))), "error": redact_inline_secret(str(exc))})
+        identities = _dedupe_identities(identities)
 
         advanced_signals: list[dict[str, Any]] = []
         if not fatal_errors:
@@ -584,6 +646,7 @@ class Engine:
                 advanced_signals = synthesize_advanced_signals(identities, raw)
                 for signal in advanced_signals:
                     identities.append(normalize_signal(signal, fingerprint_key=fingerprint_key))
+                identities = _dedupe_identities(identities)
             except Exception as exc:
                 fatal_errors.append(f"advanced correlation failure: {redact_inline_secret(str(exc))}")
 

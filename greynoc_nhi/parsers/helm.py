@@ -7,7 +7,7 @@ plaintext literal values and flags them.
 
 from __future__ import annotations
 
-__version__ = 1
+__version__ = 2
 
 import re
 from pathlib import Path
@@ -19,6 +19,11 @@ VALUES_FILE_RE = re.compile(r"^(values|values-[\w.-]+)\.ya?ml$|.*\.values\.ya?ml
 SECRET_KEY_HINT_RE = re.compile(
     r"(secret|password|passwd|api[_-]?key|token|client[_-]?secret|private[_-]?key|webhook|credentials?|registry[_-]?(?:password|auth|key))",
     re.IGNORECASE,
+)
+# Keys that reference a Kubernetes Secret object by NAME (existingSecret,
+# secretName, secretKeyRef, ...) carry an identifier, not secret material.
+SECRET_REFERENCE_KEY_RE = re.compile(
+    r"(?i)(existing[_-]?secret|secret[_-]?(?:name|ref|key[_-]?ref)|secretkeyref|name$)"
 )
 KEY_VALUE_RE = re.compile(
     r"^(\s*)([A-Za-z_][\w-]*)\s*:\s*(?:['\"]?)([^#\n]*?)(?:['\"]?)\s*(?:#.*)?$"
@@ -38,7 +43,10 @@ def should_parse(path: Path) -> bool:
 def parse(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []
     seen: set[tuple[str, int]] = set()
+    dockerconfig_line: int | None = None
     for number, line in enumerate(text.splitlines(), 1):
+        if dockerconfig_line is None and "dockerconfigjson" in line:
+            dockerconfig_line = number
         match = KEY_VALUE_RE.match(line)
         if not match:
             continue
@@ -49,6 +57,8 @@ def parse(path: Path, text: str) -> list[Signal]:
         if value.startswith("$") or value.startswith("{{") or value.startswith("ref:"):
             continue
         if not SECRET_KEY_HINT_RE.search(key):
+            continue
+        if SECRET_REFERENCE_KEY_RE.search(key):
             continue
         if not looks_like_secret(value) and "PRIVATE KEY" not in value:
             continue
@@ -73,11 +83,8 @@ def parse(path: Path, text: str) -> list[Signal]:
                 tags=["helm", "values_yaml", "plaintext_secret"],
             )
         )
-    if "imagePullSecrets" in text and "dockerconfigjson" in text and re.search(r":\s*[A-Za-z0-9+/=]{20,}", text):
-        first_line = next(
-            (n for n, l in enumerate(text.splitlines(), 1) if "dockerconfigjson" in l),
-            None,
-        )
+    if "imagePullSecrets" in text and dockerconfig_line is not None and re.search(r":\s*[A-Za-z0-9+/=]{20,}", text):
+        first_line = dockerconfig_line
         signals.append(
             make_signal(
                 rule_id="nhi_helm_values_image_pull_secret_inline",

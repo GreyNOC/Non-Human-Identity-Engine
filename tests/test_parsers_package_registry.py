@@ -14,6 +14,7 @@ def test_should_parse_known_files() -> None:
     assert package_registry.should_parse(Path("gradle.properties")) is True
     assert package_registry.should_parse(Path(".cargo/credentials")) is True
     assert package_registry.should_parse(Path(".gradle/gradle.properties")) is True
+    assert package_registry.should_parse(Path(".git-credentials")) is True
     assert package_registry.should_parse(Path("README.md")) is False
 
 
@@ -77,3 +78,18 @@ machine api.example.com
 """
     signals = package_registry.parse(Path(".netrc"), text)
     assert any(s["rule_id"] == "nhi_netrc_credential" for s in signals)
+
+
+def test_git_credentials_token_detected() -> None:
+    text = "https://alice:GNOC_FAKE_SECRET_DO_NOT_USE_GITCRED_112233@github.com\n"
+    signals = package_registry.parse(Path(".git-credentials"), text)
+    assert len(signals) == 1
+    assert signals[0]["rule_id"] == "nhi_hardcoded_secret"
+    assert signals[0]["provider"] == "git"
+    assert signals[0]["name"] == "github.com:alice"
+    assert "GNOC_FAKE_SECRET_DO_NOT_USE_GITCRED_112233" not in signals[0]["evidence"][0]
+
+
+def test_git_credentials_ignores_urls_without_secrets() -> None:
+    text = "https://github.com/org/repo.git\nhttps://alice:${GIT_TOKEN}@github.com\n"
+    assert package_registry.parse(Path(".git-credentials"), text) == []

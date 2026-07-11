@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-from greynoc_nhi.baseline import has_new_findings_at_or_above, write_baseline
+from greynoc_nhi.baseline import has_new_findings_at_or_above, read_baseline, write_baseline
 from greynoc_nhi.constants import DEFAULT_DB_PATH
 from greynoc_nhi.engine import Engine
 from greynoc_nhi.indicators import with_cli_indicator
@@ -82,7 +83,17 @@ def _post_process(scan_result, args) -> tuple[object, dict[str, Path]]:
     if args.sarif_out:
         reports["sarif"] = generate_sarif_report(scan_result, args.sarif_out)
     if args.write_baseline:
-        reports["baseline"] = write_baseline(scan_result, args.write_baseline)
+        if getattr(scan_result, "scan_trust_level", None) == "untrusted":
+            # An untrusted scan produced zero findings from a fatal error; writing
+            # that as the baseline would silently erase a real baseline and make
+            # every later gated run flag everything as new. Skip the overwrite.
+            print(
+                f"Baseline not written ({args.write_baseline}): scan was untrusted; "
+                "refusing to overwrite with an empty findings set.",
+                file=sys.stderr,
+            )
+        else:
+            reports["baseline"] = write_baseline(scan_result, args.write_baseline)
     return scan_result, reports
 
 
@@ -107,7 +118,7 @@ def scan_with_reports(engine: Engine, project_path: str | Path, args) -> tuple[o
 
 def scan_with_json_report(engine: Engine, project_path: str | Path, args) -> tuple[object, Path]:
     scan_result = engine.run_scan(project_path, baseline_path=args.baseline, **_scan_kwargs(args))
-    if args.write_baseline:
+    if args.write_baseline and getattr(scan_result, "scan_trust_level", None) != "untrusted":
         write_baseline(scan_result, args.write_baseline)
     if args.sarif_out:
         generate_sarif_report(scan_result, args.sarif_out)
@@ -148,6 +159,12 @@ def severity_exit_code(scan_result) -> int:
 
 
 def exit_code_for_baseline(scan_result, args) -> int:
+    if scan_result.scan_trust_level == "untrusted" and (
+        getattr(args, "fail_on_new", None) or getattr(args, "severity_exit_codes", False)
+    ):
+        # Fail closed: a scan the engine itself marked untrusted (fatal errors,
+        # zero findings) must not let gated invocations (pre-commit/CI) pass.
+        return EXIT_UNTRUSTED
     if getattr(args, "severity_exit_codes", False):
         return severity_exit_code(scan_result)
     return 1 if has_new_findings_at_or_above(scan_result, args.fail_on_new) else 0
@@ -159,7 +176,14 @@ def _maybe_trend(engine: Engine, result, args):
     if engine.storage is None:
         return None
     from greynoc_nhi.trend import compute_trend
-    return compute_trend(engine.storage, result)
+    try:
+        return compute_trend(engine.storage, result)
+    except Exception as exc:
+        # Trend is best-effort reporting; never let it discard a completed
+        # scan's summary and exit code. Emit to stderr so --json stdout stays a
+        # clean machine-readable payload.
+        print(f"Trend unavailable: {exc.__class__.__name__}: {exc}", file=sys.stderr)
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -218,6 +242,46 @@ def main(argv: list[str] | None = None) -> int:
             for note in outcome.notes:
                 print(f"  - {note}")
         return 0
+    wants_scan = bool(
+        args.host_audit
+        or args.linux_auth_audit
+        or args.load_samples
+        or args.scan
+        or args.json_path
+        or args.clear_cache
+    )
+    if not wants_scan:
+        # No scan-triggering flag: print help without creating the scan DB or
+        # parser cache as a side effect.
+        build_parser().print_help()
+        return 1
+    if args.baseline:
+        try:
+            read_baseline(args.baseline)
+        except (OSError, ValueError) as exc:
+            print(f"Baseline config error ({args.baseline}): {exc}")
+            return EXIT_CONFIG_ERROR
+    if args.rules:
+        # A typo'd or malformed rule pack must fail closed: silently scanning
+        # with zero custom rules would let a gated CI/pre-commit run pass while
+        # missing exactly the findings the pack was configured to catch.
+        try:
+            raw = Path(args.rules).read_text(encoding="utf-8")
+            parsed = json.loads(raw)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            print(f"Rule pack config error ({args.rules}): {exc}")
+            return EXIT_CONFIG_ERROR
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("rules"), list) or not parsed.get("rules"):
+            print(f"Rule pack config error ({args.rules}): no 'rules' list found")
+            return EXIT_CONFIG_ERROR
+        # Shape alone is not enough: load_rule_pack silently drops rules with an
+        # uncompilable pattern, bad severity, or missing id. If the pack declared
+        # rules but none load, fail closed so a gated run cannot pass while
+        # silently scanning with zero custom rules.
+        from greynoc_nhi.custom_rules import load_rule_pack
+        if not load_rule_pack(args.rules):
+            print(f"Rule pack config error ({args.rules}): no valid rules loaded (check patterns, ids, severities)")
+            return EXIT_CONFIG_ERROR
     engine = Engine(args.db, rule_pack_path=args.rules, cache_enabled=not args.no_cache)
     if args.clear_cache and engine.cache is not None:
         engine.cache.clear()
