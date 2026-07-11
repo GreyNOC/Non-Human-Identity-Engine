@@ -58,6 +58,27 @@ def test_normalization_parses_false_strings_and_list_like_fields():
     assert "GNOC_FAKE_SECRET_DO_NOT_USE_RAW_123456" not in json.dumps(identity.to_dict())
 
 
+def test_remote_mcp_bearer_header_signal_is_masked_end_to_end():
+    from greynoc_nhi.parsers import mcp_configs
+
+    raw_secret = "GNOC_FAKE_SECRET_DO_NOT_USE_REMOTE_MCP_123456"
+    text = json.dumps(
+        {
+            "mcpServers": {
+                "linear": {
+                    "url": "https://mcp.example.com/sse",
+                    "headers": {"Authorization": f"Bearer {raw_secret}"},
+                }
+            }
+        }
+    )
+    signals = mcp_configs.parse(Path("mcp.json"), text)
+    assert any(signal["rule_id"] == "nhi_mcp_remote_server" for signal in signals)
+    for signal in signals:
+        identity = normalize_signal(signal)
+        assert raw_secret not in json.dumps(identity.to_dict())
+
+
 def test_ai_nhi_fixture_detects_identity_types_severity_confidence_and_remediation():
     temp_dir = Path(mkdtemp(prefix="greynoc_ai_nhi_"))
     result = Engine(temp_dir / "db.sqlite3").run_scan(FIXTURE_DIR)

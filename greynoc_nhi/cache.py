@@ -19,10 +19,16 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from greynoc_nhi.masking import mask_secret, redact_inline_secret
-from greynoc_nhi.utils import assert_no_raw_secret_markers, chmod_private_dir, chmod_sqlite_sidecars
+from greynoc_nhi.utils import RAW_SECRET_MARKER_RE, assert_no_raw_secret_markers, chmod_private_dir, chmod_sqlite_sidecars
 
 SENSITIVE_SIGNAL_KEYS = {"secret_value"}
 SENSITIVE_TEXT_KEYS = {"evidence", "raw_reference", "context_store"}
+
+# Bump whenever the disk-sanitization rules (masking.redact_inline_secret /
+# sanitize_signal_for_disk) change. The value is folded into the cache key so
+# rows sanitized under old rules are automatically invalidated instead of
+# being re-sanitized on every hit.
+SANITIZER_VERSION = 1
 
 CACHE_SCHEMA = """
     CREATE TABLE IF NOT EXISTS parser_cache (
@@ -48,8 +54,16 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
 
 
-def _make_key(content_sha: str, parser_version: str) -> str:
-    return hashlib.sha256(f"{content_sha}|{parser_version}".encode("utf-8")).hexdigest()
+def _make_key(content_sha: str, parser_version: str, dispatch: str = "") -> str:
+    """Build the cache key.
+
+    `dispatch` identifies WHICH parsers ran for the path (should_parse is
+    path-dependent); without it, identical content under differently-gated
+    filenames would collide and drop or misattribute name-gated findings.
+    SANITIZER_VERSION invalidates rows written under older sanitization rules.
+    """
+    raw = f"{content_sha}|{parser_version}|{dispatch}|s{SANITIZER_VERSION}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def sanitize_signal_for_disk(signal: dict[str, Any]) -> dict[str, Any]:
@@ -87,6 +101,7 @@ class ParserCache:
 
     def __init__(self, db_path: str | Path | None) -> None:
         self.db_path = Path(db_path) if db_path else None
+        self._conn: sqlite3.Connection | None = None
         if self.db_path is not None:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             chmod_private_dir(self.db_path.parent)
@@ -98,16 +113,42 @@ class ParserCache:
         return self.db_path is not None
 
     def _connect(self) -> sqlite3.Connection:
-        assert self.db_path is not None
-        conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        return conn
+        """Return the persistent connection, creating it lazily.
 
-    def get(self, content_sha: str, parser_version: str) -> list[dict[str, Any]] | None:
+        One connection (with its two PRAGMAs) is reused for every get/put/
+        stats/clear instead of paying a connection open + WAL negotiation per
+        operation. The scan loop is single-threaded, so sqlite3's default
+        check_same_thread stays valid.
+        """
+        assert self.db_path is not None
+        if self._conn is None:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn = conn
+        return self._conn
+
+    def close(self) -> None:
+        """Close the persistent connection and re-apply sidecar permissions."""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except sqlite3.Error:
+                pass
+            self._conn = None
+        if self.db_path is not None:
+            chmod_sqlite_sidecars(self.db_path)
+
+    def get(
+        self,
+        content_sha: str,
+        parser_version: str,
+        *,
+        dispatch: str = "",
+    ) -> list[dict[str, Any]] | None:
         if not self.enabled():
             return None
-        key = _make_key(content_sha, parser_version)
+        key = _make_key(content_sha, parser_version, dispatch)
         try:
             with self._connect() as conn:
                 row = conn.execute(
@@ -118,21 +159,34 @@ class ParserCache:
             return None
         if row is None:
             return None
+        raw_json = row[0]
         try:
-            parsed = json.loads(row[0])
+            parsed = json.loads(raw_json)
         except (TypeError, ValueError):
             return None
         if not isinstance(parsed, list):
             return None
-        safe = sanitize_signals_for_disk(parsed)
-        if safe != parsed:
-            self.put(content_sha, parser_version, safe)
-        return safe
+        # Rows are sanitized and marker-asserted at write time, and the cache
+        # key embeds SANITIZER_VERSION, so a cheap screen over the raw JSON is
+        # enough; only legacy/tampered rows pay the full re-sanitize + rewrite.
+        if RAW_SECRET_MARKER_RE.search(raw_json) or '"secret_value"' in raw_json:
+            safe = sanitize_signals_for_disk(parsed)
+            if safe != parsed:
+                self.put(content_sha, parser_version, safe, dispatch=dispatch)
+            return safe
+        return parsed
 
-    def put(self, content_sha: str, parser_version: str, signals: list[dict[str, Any]]) -> None:
+    def put(
+        self,
+        content_sha: str,
+        parser_version: str,
+        signals: list[dict[str, Any]],
+        *,
+        dispatch: str = "",
+    ) -> None:
         if not self.enabled():
             return
-        key = _make_key(content_sha, parser_version)
+        key = _make_key(content_sha, parser_version, dispatch)
         cached_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         safe_signals = sanitize_signals_for_disk(signals)
         assert_no_raw_secret_markers(safe_signals)
@@ -142,8 +196,6 @@ class ParserCache:
                     "INSERT OR REPLACE INTO parser_cache (cache_key, parser_version, signals_json, cached_at) VALUES (?, ?, ?, ?)",
                     (key, parser_version, json.dumps(safe_signals), cached_at),
                 )
-            assert self.db_path is not None
-            chmod_sqlite_sidecars(self.db_path)
         except sqlite3.OperationalError:
             return
 
@@ -153,8 +205,6 @@ class ParserCache:
         try:
             with self._connect() as conn:
                 conn.execute("DELETE FROM parser_cache")
-            assert self.db_path is not None
-            chmod_sqlite_sidecars(self.db_path)
         except sqlite3.OperationalError:
             return
 

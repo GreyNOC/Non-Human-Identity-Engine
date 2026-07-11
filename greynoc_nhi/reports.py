@@ -116,10 +116,10 @@ def _table_rows_identities(identities: list[NonHumanIdentity]) -> str:
             "<tr>"
             f"<td>{html.escape(item.identity_type)}</td><td>{html.escape(item.source)}</td><td>{html.escape(item.name)}</td>"
             f"<td>{html.escape(item.provider or '-')}</td><td>{html.escape(item.environment or '-')}</td><td>{html.escape(item.owner or '-')}</td>"
-            f"<td>{html.escape(item.source_file or '-')}:{item.source_line or '-'}</td><td>{html.escape(_join(item.permissions + item.scopes + item.tools))}</td><td>{html.escape(risk)}</td><td>{html.escape(_join(item.ai_risk_refs))}</td>"
+            f"<td>{html.escape(item.source_file or '-')}:{item.source_line or '-'}</td><td>{html.escape(_join(item.permissions + item.scopes + item.tools))}</td><td>{html.escape(risk)}</td><td>{html.escape(_join(item.ai_risk_refs))}</td><td>{html.escape(item.masked_secret or '-')}</td>"
             "</tr>"
         )
-    return "\n".join(rows) or '<tr><td colspan="10">No identities found.</td></tr>'
+    return "\n".join(rows) or '<tr><td colspan="11">No identities found.</td></tr>'
 
 
 def _table_rows_findings(findings: list[Finding]) -> str:
@@ -288,7 +288,7 @@ footer {{ color:#52616a; font-size:12px; margin-top:34px; border-top:1px solid #
 <div class="card">Critical<strong>{sum(1 for f in scan.findings if f.severity == 'critical')}</strong></div><div class="card">Trust<strong>{html.escape(scan.scan_trust_level)}</strong></div></div>
 <p><strong>Main risk themes:</strong> {html.escape(', '.join(f'{name} ({count})' for name, count in themes) or 'None')}</p></section>
 <section><h2>Developer Summary</h2><p>Fix critical and high issues first, especially exposed secrets, broad CI/CD permissions, admin cloud policies, unsafe MCP connectors, and AI agents with unapproved tools. Medium and low issues can follow as governance hardening.</p></section>
-<section><h2>NHI Inventory</h2><table><thead><tr><th>Type</th><th>Source</th><th>Name</th><th>Provider</th><th>Environment</th><th>Owner</th><th>Source Location</th><th>Permissions / Scopes / Tools</th><th>Risk Indicators</th><th>AI Refs</th></tr></thead><tbody>{_table_rows_identities(scan.identities)}</tbody></table></section>
+<section><h2>NHI Inventory</h2><table><thead><tr><th>Type</th><th>Source</th><th>Name</th><th>Provider</th><th>Environment</th><th>Owner</th><th>Source Location</th><th>Permissions / Scopes / Tools</th><th>Risk Indicators</th><th>AI Refs</th><th>Masked Secret</th></tr></thead><tbody>{_table_rows_identities(scan.identities)}</tbody></table></section>
 <section><h2>AI Action Paths</h2><table><thead><tr><th>Attack Class</th><th>Source</th><th>Agent</th><th>Tool</th><th>Credential</th><th>Sink</th><th>Trust Boundary</th><th>Evidence</th></tr></thead><tbody>{_table_rows_risk_paths(scan)}</tbody></table></section>
 <section><h2>Findings</h2><table><thead><tr><th>Severity</th><th>Score</th><th>Confidence</th><th>Baseline</th><th>Rule ID</th><th>Category</th><th>File</th><th>Line</th><th>Evidence</th><th>Related</th><th>Why It Matters</th><th>Remediation</th><th>Controls</th><th>OWASP</th><th>AI Refs</th></tr></thead><tbody>{_table_rows_findings(scan.findings)}</tbody></table></section>
 <section><h2>OWASP NHI Mapping</h2><table><thead><tr><th>Category</th><th>Count</th><th>Explanation</th></tr></thead><tbody>{''.join(f'<tr><td>{html.escape(ref)}</td><td>{count}</td><td>{html.escape(describe_ref(ref))}</td></tr>' for ref, count in sorted(owasp_counts.items())) or '<tr><td colspan="3">No mapped findings.</td></tr>'}</tbody></table></section>
@@ -309,4 +309,5 @@ def generate_all_reports(scan: ScanResult, out_dir: str | Path | None = None) ->
         "html": generate_html_report(scan, out_dir),
         "json": generate_json_report(scan, out_dir),
         "markdown": generate_markdown_report(scan, out_dir),
+        "sarif": generate_sarif_report(scan, _ensure_out(out_dir) / f"{scan.scan_id}.sarif"),
     }

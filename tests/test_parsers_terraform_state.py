@@ -49,6 +49,43 @@ def test_state_parser_skips_non_json() -> None:
     assert terraform_state.parse(Path("terraform.tfstate"), "not json at all") == []
 
 
+def test_state_parser_line_numbers_match_key_or_value_first_occurrence() -> None:
+    state = {
+        "version": 4,
+        "resources": [
+            {
+                "type": "aws_db_instance",
+                "instances": [
+                    {"attributes": {"password": "GNOC_FAKE_SECRET_DO_NOT_USE_LINE_112233"}}
+                ],
+            }
+        ],
+    }
+    text = json.dumps(state, indent=2)
+    signals = terraform_state.parse(Path("terraform.tfstate"), text)
+    assert signals
+    expected_line = next(
+        i for i, line in enumerate(text.splitlines(), 1) if "password" in line
+    )
+    assert signals[0]["line_number"] == expected_line
+
+
+def test_state_parser_provider_uses_deepest_enclosing_resource_type() -> None:
+    state = {
+        "resources": [
+            {
+                "type": "azurerm_key_vault_secret",
+                "instances": [
+                    {"attributes": {"secret": "GNOC_FAKE_SECRET_DO_NOT_USE_TYPE_445566"}}
+                ],
+            }
+        ]
+    }
+    signals = terraform_state.parse(Path("terraform.tfstate"), json.dumps(state))
+    assert signals
+    assert signals[0]["provider"] == "azure"
+
+
 def test_scanner_picks_up_tfstate_files(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()

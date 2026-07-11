@@ -16,6 +16,8 @@ from greynoc_nhi.utils import read_text_safely
 MAX_ELF_STRING_BYTES = 256 * 1024
 STRING_RE = re.compile(rb"[ -~]{5,}")
 MODULE_REF_RE = re.compile(r"^\s*(auth|account|password|session)\s+\S+\s+(?P<module>\S+)", re.I)
+# Legacy /etc/pam.conf format carries a leading service field before the facility keyword.
+PAM_CONF_MODULE_REF_RE = re.compile(r"^\s*\S+\s+(auth|account|password|session)\s+\S+\s+(?P<module>\S+)", re.I)
 STRING_CRED_RE = re.compile(r"\b(SSH_CONNECTION|SSH_CLIENT|SSH_TTY|PAM_AUTHTOK|pam_get_authtok|getpwnam|getspnam|password=|curl\s+https?://|wget\s+https?://)\b", re.I)
 STRING_ANTIFORENSICS_RE = re.compile(r"\b(HISTFILE=/dev/null|unset HISTFILE|lastlog|utmp|wtmp|auditctl -D)\b", re.I)
 
@@ -120,10 +122,23 @@ def _line_number(text: str, needle: str) -> int | None:
     return None
 
 
+def _sshd_config_dropins(root: Path) -> list[Path]:
+    dropin_dir = root / "etc" / "ssh" / "sshd_config.d"
+    if not dropin_dir.is_dir():
+        return []
+    try:
+        return sorted(path for path in dropin_dir.glob("*.conf") if path.is_file())
+    except OSError:
+        return []
+
+
 def _pam_module_ref_signals(root: Path, config: Path, text: str, security_dirs: list[Path]) -> list[Signal]:
     signals: list[Signal] = []
+    module_ref_re = PAM_CONF_MODULE_REF_RE if config.name.lower() == "pam.conf" else MODULE_REF_RE
     for number, line in enumerate(text.splitlines(), 1):
-        match = MODULE_REF_RE.match(line)
+        if line.lstrip().startswith("#"):
+            continue
+        match = module_ref_re.match(line)
         if not match:
             continue
         module = match.group("module")
@@ -177,8 +192,14 @@ def audit_linux_auth(host_root: str | Path = "/", *, no_elf_strings: bool = Fals
     scanned_files = 0
     skipped_files = 0
     security_dirs = _security_dirs(root)
+    sshd_dropins = _sshd_config_dropins(root)
 
-    for config in [*_pam_configs(root), root / "etc" / "ssh" / "sshd_config"]:
+    for config in [
+        *_pam_configs(root),
+        root / "etc" / "pam.conf",
+        root / "etc" / "ssh" / "sshd_config",
+        *sshd_dropins,
+    ]:
         if not config.exists() or not config.is_file() or config.is_symlink():
             continue
         text = read_text_safely(config)
@@ -282,5 +303,6 @@ def audit_linux_auth(host_root: str | Path = "/", *, no_elf_strings: bool = Fals
             "linux_auth": True,
             "no_elf_strings": no_elf_strings,
             "security_dirs": [_display_path(root, path) for path in security_dirs],
+            "sshd_config_dropins": [_display_path(root, path) for path in sshd_dropins],
         },
     }
