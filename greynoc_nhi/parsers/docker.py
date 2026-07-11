@@ -35,7 +35,7 @@ def parse(path: Path, text: str) -> list[Signal]:
             make_signal(
                 rule_id="nhi_model_gateway_detected",
                 file_path=path,
-                line_number=next((i for i, l in enumerate(lines, 1) if any(marker in l.lower() for marker in GATEWAY_LINE_MARKERS)), None),
+                line_number=next((i for i, ln in enumerate(lines, 1) if any(marker in ln.lower() for marker in GATEWAY_LINE_MARKERS)), None),
                 name="Docker model gateway service",
                 identity_type="model_gateway",
                 source="docker compose",

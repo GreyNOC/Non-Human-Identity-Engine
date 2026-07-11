@@ -16,3 +16,5 @@ greynoc_nhi/data/reports/*
 !greynoc_nhi/data/reports/.gitkeep
 .greynoc_nhi/
 .coverage
+.claude/
+.ruff_cache/

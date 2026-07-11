@@ -16,6 +16,11 @@ from greynoc_nhi.utils import assert_no_raw_secret_markers, chmod_private_dir, c
 
 SCHEMA_VERSION = 1
 
+# The only tables whose names are ever interpolated into SQL. Every call site
+# selects a name from this fixed allowlist -- names never come from user input or
+# stored data -- so the f-string queries below are not an injection vector.
+_CHILD_TABLES: tuple[str, ...] = ("identities", "findings", "risk_paths")
+
 _MODEL_FIELDS: dict[type, tuple[frozenset[str], frozenset[str]]] = {}
 
 
@@ -43,10 +48,13 @@ def _rows_to_models(conn: sqlite3.Connection, table: str, scan_id: str, model: t
     fields (or containing invalid JSON) are skipped and counted instead of
     raising TypeError out of get_scan.
     """
+    if table not in _CHILD_TABLES:
+        raise ValueError(f"unknown table {table!r}")
     allowed, required = _model_fields(model)
     items: list[Any] = []
     skipped = 0
-    for row in conn.execute(f"SELECT data_json FROM {table} WHERE scan_id = ?", (scan_id,)):
+    # table is constrained to the _CHILD_TABLES allowlist above; not user input.
+    for row in conn.execute(f"SELECT data_json FROM {table} WHERE scan_id = ?", (scan_id,)):  # nosec B608
         try:
             data = json.loads(row["data_json"])
         except (TypeError, json.JSONDecodeError):
@@ -184,10 +192,13 @@ class Storage:
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
-        for table in ("identities", "findings", "risk_paths"):
+        # table names come only from the _CHILD_TABLES literal allowlist, never
+        # from user input or stored data, so these f-string DDL/DML statements
+        # are not an injection vector.
+        for table in _CHILD_TABLES:
             if table not in tables:
                 continue
-            conn.execute(f"ALTER TABLE {table} RENAME TO {table}_v0")
+            conn.execute(f"ALTER TABLE {table} RENAME TO {table}_v0")  # nosec B608
             conn.execute(
                 f"CREATE TABLE {table} ("
                 "id TEXT NOT NULL, "
@@ -196,7 +207,7 @@ class Storage:
                 "PRIMARY KEY (scan_id, id))"
             )
             conn.execute(
-                f"INSERT OR IGNORE INTO {table} (id, scan_id, data_json) "
+                f"INSERT OR IGNORE INTO {table} (id, scan_id, data_json) "  # nosec B608
                 f"SELECT id, scan_id, data_json FROM {table}_v0"
             )
             conn.execute(f"DROP TABLE {table}_v0")

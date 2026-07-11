@@ -152,7 +152,7 @@ def parse(path: Path, text: str) -> list[Signal]:
             make_signal(
                 rule_id="nhi_github_actions_pull_request_target_secrets",
                 file_path=path,
-                line_number=next((i for i, l in enumerate(lines, 1) if "pull_request_target" in l), None),
+                line_number=next((i for i, ln in enumerate(lines, 1) if "pull_request_target" in ln), None),
                 name="pull_request_target secret exposure",
                 identity_type="CI/CD secret",
                 source="github actions",
@@ -220,7 +220,7 @@ def parse(path: Path, text: str) -> list[Signal]:
             make_signal(
                 rule_id="nhi_environment_isolation_failure",
                 file_path=path,
-                line_number=next((i for i, l in enumerate(lines, 1) if "secrets." in l), None),
+                line_number=next((i for i, ln in enumerate(lines, 1) if "secrets." in ln), None),
                 name="Production deployment secrets",
                 identity_type="deployment token",
                 source="github actions",

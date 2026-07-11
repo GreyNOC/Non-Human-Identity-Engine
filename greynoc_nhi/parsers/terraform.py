@@ -71,7 +71,7 @@ def parse(path: Path, text: str) -> list[Signal]:
                     )
                 )
     if "service_account_key" in lower:
-        key_line = next((i for i, l in enumerate(lines, 1) if "service_account_key" in l.lower()), None)
+        key_line = next((i for i, ln in enumerate(lines, 1) if "service_account_key" in ln.lower()), None)
         signals.append(
             make_signal(
                 rule_id="nhi_service_account_key_file",
