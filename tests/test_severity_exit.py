@@ -13,7 +13,6 @@ from greynoc_nhi.cli import (
     exit_code_for_baseline,
     severity_exit_code,
 )
-from greynoc_nhi.engine import Engine
 from greynoc_nhi.models import Finding, ScanResult
 
 

@@ -33,7 +33,7 @@ def parse(path: Path, text: str) -> list[Signal]:
     lower_lines = [line.lower() for line in lines]
 
     def first_line(needle: str) -> int | None:
-        return next((i for i, l in enumerate(lower_lines, 1) if needle in l), None)
+        return next((i for i, ln in enumerate(lower_lines, 1) if needle in ln), None)
 
     if "kind: secret" in lower:
         signals.append(make_signal(rule_id="nhi_secret_leakage", file_path=path, line_number=first_line("kind: secret"), name="Kubernetes Secret", identity_type="service account", source="kubernetes", evidence="Kubernetes Secret object present", tags=["kubernetes", "plaintext_secret"]))

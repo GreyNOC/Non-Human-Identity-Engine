@@ -230,7 +230,7 @@ def _parse_dependabot(path: Path, text: str) -> list[Signal]:
     signals: list[Signal] = []
     if "version: 2" not in text and not re.search(r"^\s*updates\s*:", text, re.MULTILINE):
         return signals
-    line_no = next((n for n, l in enumerate(text.splitlines(), 1) if "package-ecosystem" in l), 1)
+    line_no = next((n for n, ln in enumerate(text.splitlines(), 1) if "package-ecosystem" in ln), 1)
     signals.append(
         make_signal(
             rule_id="nhi_dependabot_bot_identity",
@@ -249,7 +249,7 @@ def _parse_dependabot(path: Path, text: str) -> list[Signal]:
     )
     if re.search(r"^\s*target-branch\s*:\s*['\"]?(main|master|production|prod|release)", text, re.MULTILINE | re.IGNORECASE):
         target_line = next(
-            (n for n, l in enumerate(text.splitlines(), 1) if "target-branch" in l), None
+            (n for n, ln in enumerate(text.splitlines(), 1) if "target-branch" in ln), None
         )
         signals.append(
             make_signal(

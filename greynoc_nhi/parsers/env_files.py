@@ -202,7 +202,7 @@ def parse(path: Path, text: str) -> list[Signal]:
             make_signal(
                 rule_id="nhi_private_key_detected",
                 file_path=path,
-                line_number=next((i for i, l in enumerate(lines, 1) if "BEGIN" in l), None),
+                line_number=next((i for i, ln in enumerate(lines, 1) if "BEGIN" in ln), None),
                 name="PRIVATE_KEY_BLOCK",
                 identity_type="service account",
                 source="env file",
